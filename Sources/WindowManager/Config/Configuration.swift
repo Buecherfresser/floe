@@ -54,13 +54,17 @@ struct Hotkey: Codable, Hashable, Sendable {
 enum Action: Equatable, Sendable {
     case focusSpace(Int)
     case moveWindowToSpace(Int)
+    case moveWindowToSpaceNext
+    case moveWindowToSpacePrev
     case focusSpaceNext
     case focusSpacePrev
 }
 
 extension Action: Codable {
     private enum CodingKeys: String, CodingKey {
-        case focusSpace, moveWindowToSpace, focusSpaceNext, focusSpacePrev
+        case focusSpace, moveWindowToSpace
+        case moveWindowToSpaceNext, moveWindowToSpacePrev
+        case focusSpaceNext, focusSpacePrev
     }
 
     init(from decoder: Decoder) throws {
@@ -72,14 +76,18 @@ extension Action: Codable {
             if let v = try keyed.decodeIfPresent(Int.self, forKey: .moveWindowToSpace) {
                 self = .moveWindowToSpace(v); return
             }
+            if keyed.contains(.moveWindowToSpaceNext) { self = .moveWindowToSpaceNext; return }
+            if keyed.contains(.moveWindowToSpacePrev) { self = .moveWindowToSpacePrev; return }
             if keyed.contains(.focusSpaceNext) { self = .focusSpaceNext; return }
             if keyed.contains(.focusSpacePrev) { self = .focusSpacePrev; return }
         }
 
-        // Plain string: focusSpaceNext / focusSpacePrev
+        // Plain string for parameterless actions
         if let single = try? decoder.singleValueContainer(),
            let str = try? single.decode(String.self) {
             switch str {
+            case "moveWindowToSpaceNext": self = .moveWindowToSpaceNext; return
+            case "moveWindowToSpacePrev": self = .moveWindowToSpacePrev; return
             case "focusSpaceNext": self = .focusSpaceNext; return
             case "focusSpacePrev": self = .focusSpacePrev; return
             default: break
@@ -99,6 +107,12 @@ extension Action: Codable {
         case .moveWindowToSpace(let i):
             var c = encoder.container(keyedBy: CodingKeys.self)
             try c.encode(i, forKey: .moveWindowToSpace)
+        case .moveWindowToSpaceNext:
+            var c = encoder.singleValueContainer()
+            try c.encode("moveWindowToSpaceNext")
+        case .moveWindowToSpacePrev:
+            var c = encoder.singleValueContainer()
+            try c.encode("moveWindowToSpacePrev")
         case .focusSpaceNext:
             var c = encoder.singleValueContainer()
             try c.encode("focusSpaceNext")
@@ -121,16 +135,50 @@ struct HotkeysConfig: Codable, Equatable, Sendable {
     static let `default` = HotkeysConfig(enabled: false, bindings: [])
 }
 
+// MARK: - Spaces
+
+/// Strategy for moving windows between spaces.
+enum SpaceMoveMethod: String, Codable, Equatable, Sendable {
+    /// Try CGS private APIs first; fall back to mouse-drag simulation.
+    case auto
+    /// Always use mouse-drag simulation (works without SIP).
+    case mouseDrag
+    /// Always use CGS private APIs (requires SIP disabled on macOS 15+).
+    case cgsPrivateAPI
+}
+
+struct SpacesConfig: Codable, Equatable, Sendable {
+    var moveMethod: SpaceMoveMethod
+
+    static let `default` = SpacesConfig(moveMethod: .mouseDrag)
+}
+
 // MARK: - Top-Level Configuration
 
-struct Configuration: Codable, Equatable, Sendable {
+struct Configuration: Equatable, Sendable {
     var focusFollowsMouse: FocusFollowsMouseConfig
     var hotkeys: HotkeysConfig
+    var spaces: SpacesConfig
     var debug: Bool
 
     static let `default` = Configuration(
         focusFollowsMouse: .default,
         hotkeys: .default,
+        spaces: .default,
         debug: false
     )
+}
+
+extension Configuration: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case focusFollowsMouse, hotkeys, spaces, debug
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        focusFollowsMouse = try c.decodeIfPresent(FocusFollowsMouseConfig.self, forKey: .focusFollowsMouse) ?? .default
+        hotkeys = try c.decodeIfPresent(HotkeysConfig.self, forKey: .hotkeys) ?? .default
+        spaces = try c.decodeIfPresent(SpacesConfig.self, forKey: .spaces) ?? .default
+        debug = try c.decodeIfPresent(Bool.self, forKey: .debug) ?? false
+    }
 }

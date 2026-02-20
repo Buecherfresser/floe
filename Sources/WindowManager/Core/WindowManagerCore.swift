@@ -53,6 +53,7 @@ final class WindowManagerCore: ObservableObject {
         Log.isEnabled = config.debug
         Log.info("Core: applyConfig debug=\(config.debug) ffm.enabled=\(config.focusFollowsMouse.enabled) hotkeys.enabled=\(config.hotkeys.enabled) trusted=\(accessibilityService.isTrusted)")
 
+        spacesService.moveMethod = config.spaces.moveMethod
         applyFocusFollowsMouse(config)
         applyHotkeys(config)
     }

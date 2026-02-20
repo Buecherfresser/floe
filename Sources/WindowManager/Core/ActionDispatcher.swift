@@ -16,6 +16,12 @@ final class ActionDispatcher: @unchecked Sendable {
         case .moveWindowToSpace(let index):
             spacesService.moveWindowToSpace(at: index)
 
+        case .moveWindowToSpaceNext:
+            spacesService.moveWindowToNextSpace()
+
+        case .moveWindowToSpacePrev:
+            spacesService.moveWindowToPreviousSpace()
+
         case .focusSpaceNext:
             spacesService.focusNextSpace()
 

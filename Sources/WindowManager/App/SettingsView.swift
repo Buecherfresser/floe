@@ -128,6 +128,8 @@ struct SettingsView: View {
         switch action {
         case .focusSpace(let i):        return "Focus space \(i)"
         case .moveWindowToSpace(let i): return "Move to space \(i)"
+        case .moveWindowToSpaceNext:    return "Move window to next space"
+        case .moveWindowToSpacePrev:    return "Move window to previous space"
         case .focusSpaceNext:           return "Next space"
         case .focusSpacePrev:           return "Previous space"
         }
