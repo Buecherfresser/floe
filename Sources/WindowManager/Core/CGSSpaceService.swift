@@ -4,10 +4,12 @@ import Foundation
 
 // MARK: - CGS / SLS Private API Types
 
-typealias CGSConnectionID = UInt32
+/// Connection ID type — `int` in C (yabai extern.h).
+typealias CGSConnectionID = Int32
 typealias CGSSpaceID = UInt64
 
-private let kCGSSpaceAll: Int = 0x7
+private let kCGSSpaceAll: Int32 = 7
+private let kCGSSpaceCurrent: Int32 = 5
 
 // MARK: - SIP Detection
 
@@ -17,8 +19,6 @@ enum SIPStatus: Sendable {
     case unknown
 }
 
-/// Checks whether System Integrity Protection is disabled by invoking
-/// `csrutil status`.
 func querySIPStatus() -> SIPStatus {
     let pipe = Pipe()
     let process = Process()
@@ -40,51 +40,40 @@ func querySIPStatus() -> SIPStatus {
 
 // MARK: - CGS / SLS Function Loading
 
-/// Loads CGS and SLS private API function pointers once at process start.
-///
-/// Uses `SLSMoveWindowsToManagedSpace` as the primary window-move API, with
-/// the `SLSSpaceSetCompatID` + `SLSSetWindowListWorkspace` workaround that
-/// yabai uses on macOS 14.5+ / 15+.
-///
-/// Space *switching* via `CGSManagedDisplaySetCurrentSpace` is intentionally
-/// NOT exposed here because it only composites windows without updating the
-/// Dock's internal state (which requires code injection into the Dock process,
-/// as yabai does with its scripting addition).
 private struct CGSFunctions: Sendable {
     static let shared = CGSFunctions()
 
-    let connectionID: CGSConnectionID
+    let slsConnectionID: CGSConnectionID
+    let cgsConnectionID: CGSConnectionID
     let isLoaded: Bool
 
-    // Space enumeration & query (read-only, works even with SIP enabled)
+    // Space enumeration & query
     private let _copyManagedDisplaySpaces: @Sendable (CGSConnectionID) -> CFArray?
     private let _getActiveSpace: @Sendable (CGSConnectionID, CFString) -> CGSSpaceID
-    private let _copySpacesForWindows: @Sendable (CGSConnectionID, Int, CFArray) -> CFArray?
+    private let _copySpacesForWindows: @Sendable (CGSConnectionID, Int32, CFArray) -> CFArray?
 
-    // Window movement (requires SIP disabled on macOS 15+)
+    // Window movement
     private let _moveWindowsToManagedSpace: @Sendable (CGSConnectionID, CFArray, CGSSpaceID) -> Void
+    let hasMoveWindows: Bool
     private let _addWindowsToSpaces: @Sendable (CGSConnectionID, CFArray, CFArray) -> Void
     private let _removeWindowsFromSpaces: @Sendable (CGSConnectionID, CFArray, CFArray) -> Void
 
-    let hasMoveWindows: Bool
-
-    // macOS 15+ workaround: compat-ID path
-    private let _spaceSetCompatID: @Sendable (CGSConnectionID, CGSSpaceID, UInt32) -> Void
-    private let _setWindowListWorkspace: @Sendable (CGSConnectionID, UnsafePointer<UInt32>, Int32, UInt32) -> Void
+    // compat-ID workaround
+    private let _spaceSetCompatID: @Sendable (CGSConnectionID, CGSSpaceID, Int32) -> Int32
+    private let _setWindowListWorkspace: @Sendable (CGSConnectionID, UnsafePointer<UInt32>, Int32, Int32) -> Int32
     let hasCompatIDPath: Bool
 
     private init() {
-        typealias DefaultConnFunc = @convention(c) () -> CGSConnectionID
-        typealias CopyDisplaySpacesFunc = @convention(c) (CGSConnectionID) -> CFArray?
-        typealias ActiveFunc = @convention(c) (CGSConnectionID, CFString) -> CGSSpaceID
-        typealias CopySpacesFunc = @convention(c) (CGSConnectionID, Int, CFArray) -> CFArray?
-        typealias MoveWindowsFunc = @convention(c) (CGSConnectionID, CFArray, CGSSpaceID) -> Void
-        typealias AddFunc = @convention(c) (CGSConnectionID, CFArray, CFArray) -> Void
-        typealias RemoveFunc = @convention(c) (CGSConnectionID, CFArray, CFArray) -> Void
-        typealias CompatIDFunc = @convention(c) (CGSConnectionID, CGSSpaceID, UInt32) -> Void
-        typealias SetWorkspaceFunc = @convention(c) (CGSConnectionID, UnsafePointer<UInt32>, Int32, UInt32) -> Void
+        typealias ConnFunc = @convention(c) () -> Int32
+        typealias CopyDisplaySpacesFunc = @convention(c) (Int32) -> CFArray?
+        typealias ActiveFunc = @convention(c) (Int32, CFString) -> UInt64
+        typealias CopySpacesFunc = @convention(c) (Int32, Int32, CFArray) -> CFArray?
+        typealias MoveWindowsFunc = @convention(c) (Int32, CFArray, UInt64) -> Void
+        typealias AddFunc = @convention(c) (Int32, CFArray, CFArray) -> Void
+        typealias RemoveFunc = @convention(c) (Int32, CFArray, CFArray) -> Void
+        typealias CompatIDFunc = @convention(c) (Int32, UInt64, Int32) -> Int32
+        typealias SetWorkspaceFunc = @convention(c) (Int32, UnsafePointer<UInt32>, Int32, Int32) -> Int32
 
-        // CGS* symbols live in CoreGraphics; SLS* symbols live in SkyLight.
         let cgHandle = dlopen(
             "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics",
             RTLD_LAZY
@@ -94,13 +83,12 @@ private struct CGSFunctions: Sendable {
             RTLD_LAZY
         )
 
-        // Resolve a symbol from SkyLight first, then CoreGraphics.
         let resolvedSymbols = CGSFunctions.resolveSymbols(
             cgHandle: cgHandle, slHandle: slHandle
         )
 
         guard let syms = resolvedSymbols else {
-            isLoaded = false; connectionID = 0
+            isLoaded = false; slsConnectionID = 0; cgsConnectionID = 0
             hasMoveWindows = false; hasCompatIDPath = false
             _copyManagedDisplaySpaces = { _ in nil }
             _getActiveSpace = { _, _ in 0 }
@@ -108,13 +96,20 @@ private struct CGSFunctions: Sendable {
             _moveWindowsToManagedSpace = { _, _, _ in }
             _addWindowsToSpaces = { _, _, _ in }
             _removeWindowsFromSpaces = { _, _, _ in }
-            _spaceSetCompatID = { _, _, _ in }
-            _setWindowListWorkspace = { _, _, _, _ in }
+            _spaceSetCompatID = { _, _, _ in -1 }
+            _setWindowListWorkspace = { _, _, _, _ in -1 }
             return
         }
 
-        let defaultConn = unsafeBitCast(syms.pDefault, to: DefaultConnFunc.self)
-        connectionID = defaultConn()
+        let slsConnFn = unsafeBitCast(syms.pSLSConnection, to: ConnFunc.self)
+        slsConnectionID = slsConnFn()
+
+        if let pCGS = syms.pCGSConnection {
+            let cgsConnFn = unsafeBitCast(pCGS, to: ConnFunc.self)
+            cgsConnectionID = cgsConnFn()
+        } else {
+            cgsConnectionID = slsConnectionID
+        }
 
         let displayFn = unsafeBitCast(syms.pDisplaySpaces, to: CopyDisplaySpacesFunc.self)
         _copyManagedDisplaySpaces = { displayFn($0) }
@@ -147,16 +142,17 @@ private struct CGSFunctions: Sendable {
             _setWindowListWorkspace = { wsFn($0, $1, $2, $3) }
             hasCompatIDPath = true
         } else {
-            _spaceSetCompatID = { _, _, _ in }
-            _setWindowListWorkspace = { _, _, _, _ in }
+            _spaceSetCompatID = { _, _, _ in -1 }
+            _setWindowListWorkspace = { _, _, _, _ in -1 }
             hasCompatIDPath = false
         }
 
-        isLoaded = connectionID != 0
+        isLoaded = slsConnectionID != 0
     }
 
     private struct ResolvedSymbols {
-        let pDefault: UnsafeMutableRawPointer
+        let pSLSConnection: UnsafeMutableRawPointer
+        let pCGSConnection: UnsafeMutableRawPointer?
         let pDisplaySpaces: UnsafeMutableRawPointer
         let pActive: UnsafeMutableRawPointer
         let pCopySpaces: UnsafeMutableRawPointer
@@ -179,16 +175,17 @@ private struct CGSFunctions: Sendable {
             return nil
         }
 
-        guard let pDefault = sym("CGSDefaultConnectionForThread"),
-              let pDisplaySpaces = sym("CGSCopyManagedDisplaySpaces"),
-              let pActive = sym("CGSManagedDisplayGetCurrentSpace"),
-              let pCopySpaces = sym("CGSCopySpacesForWindows"),
+        guard let pSLSConn = sym("SLSMainConnectionID"),
+              let pDisplaySpaces = sym("SLSCopyManagedDisplaySpaces") ?? sym("CGSCopyManagedDisplaySpaces"),
+              let pActive = sym("SLSManagedDisplayGetCurrentSpace") ?? sym("CGSManagedDisplayGetCurrentSpace"),
+              let pCopySpaces = sym("SLSCopySpacesForWindows") ?? sym("CGSCopySpacesForWindows"),
               let pAdd = sym("CGSAddWindowsToSpaces"),
               let pRemove = sym("CGSRemoveWindowsFromSpaces")
         else { return nil }
 
         return ResolvedSymbols(
-            pDefault: pDefault,
+            pSLSConnection: pSLSConn,
+            pCGSConnection: sym("CGSDefaultConnectionForThread"),
             pDisplaySpaces: pDisplaySpaces,
             pActive: pActive,
             pCopySpaces: pCopySpaces,
@@ -200,70 +197,64 @@ private struct CGSFunctions: Sendable {
         )
     }
 
-    // MARK: Read-only queries
+    // MARK: Queries
 
-    func copyManagedDisplaySpaces() -> CFArray? {
-        _copyManagedDisplaySpaces(connectionID)
+    func copyManagedDisplaySpaces(_ cid: CGSConnectionID? = nil) -> CFArray? {
+        _copyManagedDisplaySpaces(cid ?? slsConnectionID)
     }
 
-    func getActiveSpace() -> CGSSpaceID {
-        _getActiveSpace(connectionID, "Main" as CFString)
+    func getActiveSpace(_ cid: CGSConnectionID? = nil) -> CGSSpaceID {
+        _getActiveSpace(cid ?? slsConnectionID, "Main" as CFString)
     }
 
-    func copySpacesForWindows(_ mask: Int, _ windows: CFArray) -> CFArray? {
-        _copySpacesForWindows(connectionID, mask, windows)
+    func copySpacesForWindows(_ mask: Int32, _ windows: CFArray, cid: CGSConnectionID? = nil) -> CFArray? {
+        _copySpacesForWindows(cid ?? slsConnectionID, mask, windows)
     }
 
     // MARK: Window movement
 
-    func moveWindowsToManagedSpace(_ windows: CFArray, _ spaceID: CGSSpaceID) {
-        _moveWindowsToManagedSpace(connectionID, windows, spaceID)
+    func moveWindowsToManagedSpace(_ windows: CFArray, _ spaceID: CGSSpaceID, cid: CGSConnectionID? = nil) {
+        _moveWindowsToManagedSpace(cid ?? slsConnectionID, windows, spaceID)
     }
 
-    func addWindowsToSpaces(_ windows: CFArray, _ spaces: CFArray) {
-        _addWindowsToSpaces(connectionID, windows, spaces)
+    func addWindowsToSpaces(_ windows: CFArray, _ spaces: CFArray, cid: CGSConnectionID? = nil) {
+        _addWindowsToSpaces(cid ?? slsConnectionID, windows, spaces)
     }
 
-    func removeWindowsFromSpaces(_ windows: CFArray, _ spaces: CFArray) {
-        _removeWindowsFromSpaces(connectionID, windows, spaces)
+    func removeWindowsFromSpaces(_ windows: CFArray, _ spaces: CFArray, cid: CGSConnectionID? = nil) {
+        _removeWindowsFromSpaces(cid ?? slsConnectionID, windows, spaces)
     }
 
-    /// yabai's macOS 14.5+ / 15+ workaround:
-    ///   SLSSpaceSetCompatID(conn, targetSpace, 0x79616265)
-    ///   SLSSetWindowListWorkspace(conn, &wid, 1, 0x79616265)
-    ///   SLSSpaceSetCompatID(conn, targetSpace, 0x0)
-    func moveWindowViaCompatID(_ windowID: UInt32, toSpace spaceID: CGSSpaceID) {
-        let tag: UInt32 = 0x79616265 // "yabe"
-        _spaceSetCompatID(connectionID, spaceID, tag)
-        withUnsafePointer(to: windowID) { ptr in
-            _setWindowListWorkspace(connectionID, ptr, 1, tag)
+    @discardableResult
+    func moveWindowViaCompatID(_ windowID: UInt32, toSpace spaceID: CGSSpaceID, cid: CGSConnectionID? = nil) -> Bool {
+        let c = cid ?? slsConnectionID
+        let tag: Int32 = 0x79616265
+        let err1 = _spaceSetCompatID(c, spaceID, tag)
+        var wid = windowID
+        let err2 = _setWindowListWorkspace(c, &wid, 1, tag)
+        let err3 = _spaceSetCompatID(c, spaceID, 0)
+        Log.info("CGS: compatID(cid=\(c)) errors: set=\(err1) ws=\(err2) clear=\(err3)")
+        return err2 == 0
+    }
+
+    /// Query which spaces a window belongs to.
+    func windowSpaces(_ windowID: CGWindowID) -> [CGSSpaceID] {
+        let arr = [NSNumber(value: windowID)] as CFArray
+        guard let spaces = copySpacesForWindows(kCGSSpaceAll, arr) as? [UInt64] else {
+            return []
         }
-        _spaceSetCompatID(connectionID, spaceID, 0)
+        return spaces
     }
 }
 
 // MARK: - CGSSpaceService
 
-/// Provides space enumeration and window-to-space movement via CGS / SLS
-/// private APIs.
-///
-/// **Space switching** is intentionally NOT supported here. Yabai's source
-/// shows that `SLSManagedDisplaySetCurrentSpace` alone only composites
-/// windows; a proper switch also requires `SLSShowSpaces`, `SLSHideSpaces`,
-/// and updating the Dock's internal `_currentSpace` ivar via code injection.
-/// We use keyboard simulation for space switching instead.
-///
-/// **Window movement** uses `SLSMoveWindowsToManagedSpace` with a fallback
-/// to `SLSSpaceSetCompatID` + `SLSSetWindowListWorkspace` on macOS 15+.
-/// Requires SIP disabled.
 enum CGSSpaceService {
 
     static var isAvailable: Bool { CGSFunctions.shared.isLoaded }
 
     // MARK: - Space Enumeration
 
-    /// Returns an ordered list of user-space IDs for the main display.
-    /// Index 0 corresponds to Desktop 1, etc.
     static func userSpaceIDs() -> [CGSSpaceID] {
         let fns = CGSFunctions.shared
         guard fns.isLoaded else { return [] }
@@ -277,7 +268,6 @@ enum CGSSpaceService {
             guard let spaces = display["Spaces"] as? [[String: Any]] else { continue }
             for space in spaces {
                 let type = space["type"] as? Int ?? -1
-                // type 0 = user space, type 4 = fullscreen
                 guard type == 0 else { continue }
                 if let id64 = space["id64"] as? UInt64 {
                     result.append(id64)
@@ -289,7 +279,6 @@ enum CGSSpaceService {
         return result
     }
 
-    /// Maps a 1-based space index to its CGS space ID.
     static func spaceID(forIndex index: Int) -> CGSSpaceID? {
         let spaces = userSpaceIDs()
         guard index >= 1, index <= spaces.count else { return nil }
@@ -298,69 +287,131 @@ enum CGSSpaceService {
 
     // MARK: - Window Movement
 
-    /// Whether we should prefer the macOS 14.5+ / 15+ compat-ID workaround
-    /// over the direct `SLSMoveWindowsToManagedSpace` call.
-    private static var preferCompatIDWorkaround: Bool {
-        let v = ProcessInfo.processInfo.operatingSystemVersion
-        if v.majorVersion == 14 && v.minorVersion >= 5 { return true }
-        return v.majorVersion >= 15
-    }
-
-    /// Whether any window-move API is available.
     static var canMoveWindows: Bool {
-        let fns = CGSFunctions.shared
-        return fns.isLoaded && (fns.hasMoveWindows || fns.hasCompatIDPath)
+        CGSFunctions.shared.isLoaded
     }
 
-    /// Moves a window to the space identified by `targetSpaceID`.
+    /// Moves a window to the target space.
     ///
-    /// Strategy (in priority order):
-    /// 1. On macOS 14.5+ / 15+: compat-ID workaround (yabai's approach)
-    /// 2. `SLSMoveWindowsToManagedSpace` (direct, works on older macOS)
-    /// 3. `CGSAddWindowsToSpaces` + `CGSRemoveWindowsFromSpaces` (fallback)
+    /// Tries every available strategy with diagnostic logging.
+    /// Checks `CGSCopySpacesForWindows` after each attempt to verify
+    /// whether the window actually moved.
     static func moveWindow(_ windowID: CGWindowID, toSpace targetSpaceID: CGSSpaceID) -> Bool {
         let fns = CGSFunctions.shared
         guard fns.isLoaded else { return false }
 
-        if preferCompatIDWorkaround && fns.hasCompatIDPath {
-            Log.info("CGS: moving window \(windowID) via compat-ID workaround")
-            fns.moveWindowViaCompatID(windowID, toSpace: targetSpaceID)
-        } else if fns.hasMoveWindows {
-            Log.info("CGS: moving window \(windowID) via SLSMoveWindowsToManagedSpace")
-            let windowArray = [windowID] as CFArray
-            fns.moveWindowsToManagedSpace(windowArray, targetSpaceID)
-        } else {
-            Log.info("CGS: moving window \(windowID) via add/remove spaces")
-            let windowArray = [windowID] as CFArray
-            let spaceArray = [targetSpaceID] as CFArray
-            fns.addWindowsToSpaces(windowArray, spaceArray)
-            let currentSpaces = fns.copySpacesForWindows(kCGSSpaceAll, windowArray) as? [CGSSpaceID] ?? []
-            let toRemove = currentSpaces.filter { $0 != targetSpaceID }
-            if !toRemove.isEmpty {
-                fns.removeWindowsFromSpaces(windowArray, toRemove as CFArray)
-            }
+        let slsCid = fns.slsConnectionID
+        let cgsCid = fns.cgsConnectionID
+
+        Log.info("CGS: moveWindow(\(windowID) → space \(targetSpaceID)) slsCid=\(slsCid) cgsCid=\(cgsCid)")
+
+        let beforeSpaces = fns.windowSpaces(windowID)
+        Log.info("CGS: window \(windowID) currently on spaces: \(beforeSpaces)")
+
+        if beforeSpaces.contains(targetSpaceID) {
+            Log.info("CGS: window already on target space")
+            return true
         }
 
-        return true
+        let windowArr = [NSNumber(value: windowID)] as CFArray
+
+        // Strategy 1: SLSMoveWindowsToManagedSpace (with SLS connection)
+        if fns.hasMoveWindows {
+            Log.info("CGS: [1] SLSMoveWindowsToManagedSpace(slsCid=\(slsCid))")
+            fns.moveWindowsToManagedSpace(windowArr, targetSpaceID, cid: slsCid)
+            let after = fns.windowSpaces(windowID)
+            if after.contains(targetSpaceID) {
+                Log.info("CGS: [1] SUCCESS — window now on spaces: \(after)")
+                return true
+            }
+            Log.info("CGS: [1] no effect — window still on: \(after)")
+        }
+
+        // Strategy 1b: SLSMoveWindowsToManagedSpace (with CGS connection)
+        if fns.hasMoveWindows && cgsCid != slsCid {
+            Log.info("CGS: [1b] SLSMoveWindowsToManagedSpace(cgsCid=\(cgsCid))")
+            fns.moveWindowsToManagedSpace(windowArr, targetSpaceID, cid: cgsCid)
+            let after = fns.windowSpaces(windowID)
+            if after.contains(targetSpaceID) {
+                Log.info("CGS: [1b] SUCCESS — window now on spaces: \(after)")
+                return true
+            }
+            Log.info("CGS: [1b] no effect — window still on: \(after)")
+        }
+
+        // Strategy 2: add target, remove old
+        do {
+            Log.info("CGS: [2] CGSAddWindowsToSpaces + CGSRemoveWindowsFromSpaces (slsCid=\(slsCid))")
+            let spaceArr = [NSNumber(value: targetSpaceID)] as CFArray
+            fns.addWindowsToSpaces(windowArr, spaceArr, cid: slsCid)
+            let afterAdd = fns.windowSpaces(windowID)
+            Log.info("CGS: [2] after add: \(afterAdd)")
+            let toRemove = afterAdd.filter { $0 != targetSpaceID }
+            if !toRemove.isEmpty {
+                let removeArr = toRemove.map { NSNumber(value: $0) } as CFArray
+                fns.removeWindowsFromSpaces(windowArr, removeArr, cid: slsCid)
+            }
+            let afterRemove = fns.windowSpaces(windowID)
+            if afterRemove.contains(targetSpaceID) && !afterRemove.contains(where: { beforeSpaces.contains($0) && $0 != targetSpaceID }) {
+                Log.info("CGS: [2] SUCCESS — window now on spaces: \(afterRemove)")
+                return true
+            }
+            Log.info("CGS: [2] no effect — window still on: \(afterRemove)")
+        }
+
+        // Strategy 2b: same with CGS connection
+        if cgsCid != slsCid {
+            Log.info("CGS: [2b] CGSAddWindowsToSpaces + CGSRemoveWindowsFromSpaces (cgsCid=\(cgsCid))")
+            let spaceArr = [NSNumber(value: targetSpaceID)] as CFArray
+            fns.addWindowsToSpaces(windowArr, spaceArr, cid: cgsCid)
+            let afterAdd = fns.windowSpaces(windowID)
+            Log.info("CGS: [2b] after add: \(afterAdd)")
+            let toRemove = afterAdd.filter { $0 != targetSpaceID }
+            if !toRemove.isEmpty {
+                let removeArr = toRemove.map { NSNumber(value: $0) } as CFArray
+                fns.removeWindowsFromSpaces(windowArr, removeArr, cid: cgsCid)
+            }
+            let afterRemove = fns.windowSpaces(windowID)
+            if afterRemove.contains(targetSpaceID) {
+                Log.info("CGS: [2b] SUCCESS — window now on spaces: \(afterRemove)")
+                return true
+            }
+            Log.info("CGS: [2b] no effect — window still on: \(afterRemove)")
+        }
+
+        // Strategy 3: compat-ID workaround
+        if fns.hasCompatIDPath {
+            Log.info("CGS: [3] compat-ID workaround (slsCid=\(slsCid))")
+            fns.moveWindowViaCompatID(windowID, toSpace: targetSpaceID, cid: slsCid)
+            let after = fns.windowSpaces(windowID)
+            if after.contains(targetSpaceID) {
+                Log.info("CGS: [3] SUCCESS — window now on spaces: \(after)")
+                return true
+            }
+            Log.info("CGS: [3] no effect — window still on: \(after)")
+        }
+
+        Log.info("CGS: all strategies exhausted — window move failed")
+        return false
     }
 
-    /// Moves a window to the space at the given 1-based index.
     @discardableResult
     static func moveWindow(_ windowID: CGWindowID, toSpaceAt index: Int) -> Bool {
-        guard let sid = spaceID(forIndex: index) else { return false }
+        guard let sid = spaceID(forIndex: index) else {
+            Log.info("CGS: no space ID found for index \(index)")
+            return false
+        }
         return moveWindow(windowID, toSpace: sid)
     }
 
     // MARK: - Query
 
-    /// Returns the space ID the user is currently viewing.
     static func currentSpaceID() -> CGSSpaceID {
         let fns = CGSFunctions.shared
         guard fns.isLoaded else { return 0 }
         return fns.getActiveSpace()
     }
 
-    /// Returns the 1-based index of the current space, or `nil`.
     static func currentSpaceIndex() -> Int? {
         let current = currentSpaceID()
         guard current != 0 else { return nil }
@@ -372,51 +423,35 @@ enum CGSSpaceService {
 
     // MARK: - Verification
 
-    /// Verifies that the CGS space APIs are actually functional and not
-    /// silently neutered (as happens on macOS 15+ with SIP enabled).
-    ///
-    /// Checks that:
-    /// 1. Core symbols were loaded
-    /// 2. Space enumeration returns a non-empty list
-    /// 3. At least one window-move API is available
-    /// 4. `CGSCopySpacesForWindows` returns data (not neutered)
     static func verifyFunctional() -> Bool {
         let fns = CGSFunctions.shared
         guard fns.isLoaded else {
             Log.info("CGS: symbols not loaded")
             return false
         }
+        Log.info("CGS: slsConnectionID=\(fns.slsConnectionID), cgsConnectionID=\(fns.cgsConnectionID)")
 
         let spaces = userSpaceIDs()
         guard !spaces.isEmpty else {
             Log.info("CGS: space enumeration returned empty list")
             return false
         }
-        Log.info("CGS: enumerated \(spaces.count) user space(s)")
+        Log.info("CGS: enumerated \(spaces.count) user space(s): \(spaces)")
+        Log.info("CGS: current space ID = \(currentSpaceID()), index = \(currentSpaceIndex() ?? -1)")
 
-        guard canMoveWindows else {
-            Log.info("CGS: no window-move APIs available (neither SLS nor compat-ID)")
-            return false
-        }
-        Log.info("CGS: move APIs available — hasMoveWindows=\(fns.hasMoveWindows), hasCompatID=\(fns.hasCompatIDPath)")
+        Log.info("CGS: APIs — hasMoveWindows=\(fns.hasMoveWindows), hasCompatID=\(fns.hasCompatIDPath)")
 
-        // Try to verify that CGSCopySpacesForWindows isn't neutered by
-        // querying any on-screen window.
         let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
         if let windowList = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]],
            let windowInfo = windowList.first(where: {
                ($0[kCGWindowLayer as String] as? Int) == 0
            }),
            let windowID = windowInfo[kCGWindowNumber as String] as? CGWindowID {
-            let windowArray = [windowID] as CFArray
-            if let memberSpaces = fns.copySpacesForWindows(kCGSSpaceAll, windowArray) as? [CGSSpaceID],
-               !memberSpaces.isEmpty {
-                Log.info("CGS: copySpacesForWindows returned \(memberSpaces.count) space(s) — APIs functional")
-            } else {
-                Log.info("CGS: copySpacesForWindows returned empty — APIs may be neutered, but proceeding (move might still work)")
+            let memberSpaces = fns.windowSpaces(windowID)
+            Log.info("CGS: test window \(windowID) on spaces: \(memberSpaces)")
+            if memberSpaces.isEmpty {
+                Log.info("CGS: copySpacesForWindows returned empty — APIs may be neutered")
             }
-        } else {
-            Log.info("CGS: no on-screen windows for copySpacesForWindows test, skipping")
         }
 
         Log.info("CGS: verification passed")
