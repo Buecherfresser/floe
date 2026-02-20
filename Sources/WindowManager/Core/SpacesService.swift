@@ -32,19 +32,62 @@ private let kDragNudge: CGFloat = 1
 
 /// Provides space switching and window-to-space movement.
 ///
-/// Space switching uses simulated Mission Control keyboard shortcuts (Ctrl+N).
-/// Window movement uses mouse-drag simulation (grab title bar, switch space,
-/// release) by default.  When configured, the CGS private API path can be used
-/// instead (requires SIP disabled on macOS 15+).
+/// Space switching uses simulated Mission Control keyboard shortcuts (Ctrl+N)
+/// or CGS private APIs when SIP is disabled.
+/// Window movement uses mouse-drag simulation by default, or CGS private APIs
+/// when available and configured.
 final class SpacesService: @unchecked Sendable {
 
     var moveMethod: SpaceMoveMethod = .mouseDrag
 
+    /// Detected SIP status, set by ``verifyCGSAvailability()``.
+    private(set) var sipStatus: SIPStatus = .unknown
+
+    /// Set to `true` after ``verifyCGSAvailability()`` confirms the CGS
+    /// private APIs are actually functional (not silently neutered).
+    private(set) var cgsVerified = false
+
+    /// Checks SIP status and runs a CGS smoke test.  Should be called once
+    /// at startup.  The result is cached in ``sipStatus`` and ``cgsVerified``.
+    func verifyCGSAvailability() {
+        sipStatus = querySIPStatus()
+        Log.info("Spaces: SIP status = \(sipStatus)")
+
+        guard sipStatus == .disabled else {
+            Log.info("Spaces: SIP is not disabled — CGS path unavailable")
+            cgsVerified = false
+            return
+        }
+
+        guard CGSSpaceService.isAvailable else {
+            Log.info("Spaces: CGS symbols not loaded")
+            cgsVerified = false
+            return
+        }
+
+        cgsVerified = CGSSpaceService.verifyFunctional()
+        Log.info("Spaces: CGS verification \(cgsVerified ? "passed" : "failed")")
+    }
+
+    /// Whether to use the CGS path for the current operation, given the
+    /// configured ``moveMethod``.
+    private var useCGS: Bool {
+        switch moveMethod {
+        case .cgsPrivateAPI: return cgsVerified
+        case .auto:          return cgsVerified
+        case .mouseDrag:     return false
+        }
+    }
+
     // MARK: - Space Switching
+    //
+    // Always uses keyboard simulation.  CGSManagedDisplaySetCurrentSpace
+    // only composites windows without updating the Dock's internal state
+    // (which requires code injection, as yabai does via its scripting
+    // addition).  Keyboard simulation is reliable and fast.
 
     /// Switches to the space at the given 1-based index by simulating
     /// the Mission Control shortcut Ctrl+Number.
-    /// Requires "Switch to Desktop N" shortcuts enabled in System Settings.
     func focusSpace(at index: Int) {
         guard index >= 1, index <= 10 else {
             Log.error("Spaces: focusSpace index \(index) out of range 1-10")
@@ -78,14 +121,15 @@ final class SpacesService: @unchecked Sendable {
     // MARK: - Window Movement
 
     /// Moves the focused window to the space at the given 1-based index.
-    ///
-    /// Exploits the macOS behaviour where a held window travels with a
-    /// space switch: we simulate mouse-down on the title bar, fire the
-    /// Ctrl+Number shortcut that Mission Control listens for, then release
-    /// the mouse after the transition animation.
     func moveWindowToSpace(at index: Int) {
         guard index >= 1, index <= 10 else {
             Log.error("Spaces: moveWindowToSpace index \(index) out of range 1-10")
+            return
+        }
+
+        if useCGS, let wid = focusedWindowID() {
+            Log.info("Spaces: moving window \(wid) to space \(index) via CGS")
+            CGSSpaceService.moveWindow(wid, toSpaceAt: index)
             return
         }
 
@@ -94,7 +138,6 @@ final class SpacesService: @unchecked Sendable {
             Log.error("Spaces: moveWindowToSpace — no keycode for \"\(digit)\"")
             return
         }
-
         guard let frame = focusedWindowFrame() else {
             Log.error("Spaces: moveWindowToSpace — could not determine focused window frame")
             return
@@ -104,26 +147,40 @@ final class SpacesService: @unchecked Sendable {
         performMouseDragSpaceSwitch(windowFrame: frame, keyCode: keyCode, flags: .maskControl)
     }
 
-    /// Moves the focused window to the next space (Ctrl+Right) via mouse-drag.
+    /// Moves the focused window to the next space.
     func moveWindowToNextSpace() {
+        if useCGS, let wid = focusedWindowID(), let current = CGSSpaceService.currentSpaceIndex() {
+            let spaces = CGSSpaceService.userSpaceIDs()
+            let next = current < spaces.count ? current + 1 : 1
+            Log.info("Spaces: moving window \(wid) to next space (\(next)) via CGS")
+            CGSSpaceService.moveWindow(wid, toSpaceAt: next)
+            return
+        }
+
         guard let keyCode = KeyCode.from("right") else { return }
         guard let frame = focusedWindowFrame() else {
             Log.error("Spaces: moveWindowToNextSpace — could not determine focused window frame")
             return
         }
-
         Log.info("Spaces: moving focused window to next space via mouse-drag + Ctrl+Right")
         performMouseDragSpaceSwitch(windowFrame: frame, keyCode: keyCode, flags: .maskControl)
     }
 
-    /// Moves the focused window to the previous space (Ctrl+Left) via mouse-drag.
+    /// Moves the focused window to the previous space.
     func moveWindowToPreviousSpace() {
+        if useCGS, let wid = focusedWindowID(), let current = CGSSpaceService.currentSpaceIndex() {
+            let spaces = CGSSpaceService.userSpaceIDs()
+            let prev = current > 1 ? current - 1 : spaces.count
+            Log.info("Spaces: moving window \(wid) to previous space (\(prev)) via CGS")
+            CGSSpaceService.moveWindow(wid, toSpaceAt: prev)
+            return
+        }
+
         guard let keyCode = KeyCode.from("left") else { return }
         guard let frame = focusedWindowFrame() else {
             Log.error("Spaces: moveWindowToPreviousSpace — could not determine focused window frame")
             return
         }
-
         Log.info("Spaces: moving focused window to previous space via mouse-drag + Ctrl+Left")
         performMouseDragSpaceSwitch(windowFrame: frame, keyCode: keyCode, flags: .maskControl)
     }
@@ -177,7 +234,33 @@ final class SpacesService: @unchecked Sendable {
         }
     }
 
-    // MARK: - Focused Window
+    // MARK: - Focused Window Helpers
+
+    /// Returns the CGWindowID of the frontmost app's focused window by
+    /// matching the AX window position against CGWindowList.
+    private func focusedWindowID() -> CGWindowID? {
+        guard let frontApp = NSWorkspace.shared.frontmostApplication else { return nil }
+        let pid = frontApp.processIdentifier
+
+        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        guard let windowList = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+            return nil
+        }
+
+        // Pick the first on-screen, layer-0 window belonging to the
+        // frontmost app.
+        for info in windowList {
+            guard let ownerPID = info[kCGWindowOwnerPID as String] as? Int32,
+                  ownerPID == pid,
+                  let layer = info[kCGWindowLayer as String] as? Int,
+                  layer == 0,
+                  let windowID = info[kCGWindowNumber as String] as? CGWindowID
+            else { continue }
+            return windowID
+        }
+
+        return nil
+    }
 
     private func focusedWindowFrame() -> CGRect? {
         guard let frontApp = NSWorkspace.shared.frontmostApplication else { return nil }

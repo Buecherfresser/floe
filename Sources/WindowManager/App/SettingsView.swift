@@ -3,6 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject private var configManager: ConfigManager
     @EnvironmentObject private var accessibilityService: AccessibilityService
+    @EnvironmentObject private var core: WindowManagerCore
 
     @State private var newIgnoreApp = ""
 
@@ -11,10 +12,11 @@ struct SettingsView: View {
             accessibilitySection
             focusFollowsMouseSection
             hotkeysSection
+            spacesSection
             advancedSection
         }
         .formStyle(.grouped)
-        .frame(minWidth: 420, minHeight: 480)
+        .frame(minWidth: 420, minHeight: 520)
     }
 
     // MARK: - Sections
@@ -132,6 +134,62 @@ struct SettingsView: View {
         case .moveWindowToSpacePrev:    return "Move window to previous space"
         case .focusSpaceNext:           return "Next space"
         case .focusSpacePrev:           return "Previous space"
+        }
+    }
+
+    @ViewBuilder
+    private var spacesSection: some View {
+        Section("Spaces") {
+            Picker("Window move method", selection: binding(\.spaces.moveMethod)) {
+                Text("Mouse Drag").tag(SpaceMoveMethod.mouseDrag)
+                Text("Auto").tag(SpaceMoveMethod.auto)
+                Text("CGS Private API").tag(SpaceMoveMethod.cgsPrivateAPI)
+            }
+
+            moveMethodDescription
+        }
+    }
+
+    @ViewBuilder
+    private var moveMethodDescription: some View {
+        switch configManager.config.spaces.moveMethod {
+        case .mouseDrag:
+            Text("Grabs the window title bar and simulates a space switch keyboard shortcut. No SIP changes required.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .auto:
+            if core.cgsAvailable {
+                Label("Using private APIs (SIP disabled)", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                    .font(.caption)
+            } else {
+                Label("Using mouse drag (SIP enabled)", systemImage: "hand.draw.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        case .cgsPrivateAPI:
+            if core.cgsAvailable {
+                Label("Private APIs verified and active", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                    .font(.caption)
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    Label(cgsUnavailableReason, systemImage: "xmark.circle.fill")
+                        .foregroundStyle(.red)
+                        .font(.caption)
+                    Text("Requires SIP to be at least partially disabled (csrutil disable --without fs).")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private var cgsUnavailableReason: String {
+        switch core.sipStatus {
+        case .enabled:  return "SIP is enabled — private APIs are blocked"
+        case .unknown:  return "Could not determine SIP status"
+        case .disabled: return "Private APIs failed to load despite SIP being disabled"
         }
     }
 

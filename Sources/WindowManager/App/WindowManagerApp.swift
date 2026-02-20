@@ -49,6 +49,7 @@ struct WindowManagerApp: App {
             SettingsView()
                 .environmentObject(appState.configManager)
                 .environmentObject(appState.accessibilityService)
+                .environmentObject(appState.core)
         }
 
         Window("Welcome", id: "onboarding") {

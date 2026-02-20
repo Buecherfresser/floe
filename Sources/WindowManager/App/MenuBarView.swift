@@ -46,6 +46,7 @@ struct MenuBarView: View {
         var features: [String] = []
         if core.configManager.config.focusFollowsMouse.enabled { features.append("FFM") }
         if core.hotkeysActive { features.append("Hotkeys") }
+        if core.cgsAvailable { features.append("CGS") }
         return features.isEmpty ? "Active" : "Active: \(features.joined(separator: ", "))"
     }
 

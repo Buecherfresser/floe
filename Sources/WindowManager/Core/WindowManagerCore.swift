@@ -14,6 +14,8 @@ final class WindowManagerCore: ObservableObject {
 
     @Published private(set) var isRunning = false
     @Published private(set) var hotkeysActive = false
+    @Published private(set) var sipStatus: SIPStatus = .unknown
+    @Published private(set) var cgsAvailable = false
 
     init(configManager: ConfigManager, accessibilityService: AccessibilityService) {
         self.configManager = configManager
@@ -34,6 +36,9 @@ final class WindowManagerCore: ObservableObject {
             return
         }
         Log.info("Core: starting")
+        spacesService.verifyCGSAvailability()
+        sipStatus = spacesService.sipStatus
+        cgsAvailable = spacesService.cgsVerified
         applyConfig(configManager.config)
         isRunning = true
     }
