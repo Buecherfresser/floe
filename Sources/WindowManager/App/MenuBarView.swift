@@ -42,7 +42,11 @@ struct MenuBarView: View {
 
     private var statusText: String {
         if !accessibilityService.isTrusted { return "Accessibility access required" }
-        return core.isRunning ? "Active" : "Paused"
+        if !core.isRunning { return "Paused" }
+        var features: [String] = []
+        if core.configManager.config.focusFollowsMouse.enabled { features.append("FFM") }
+        if core.hotkeysActive { features.append("Hotkeys") }
+        return features.isEmpty ? "Active" : "Active: \(features.joined(separator: ", "))"
     }
 
     @ViewBuilder

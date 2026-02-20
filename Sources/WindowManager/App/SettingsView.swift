@@ -10,10 +10,11 @@ struct SettingsView: View {
         Form {
             accessibilitySection
             focusFollowsMouseSection
+            hotkeysSection
             advancedSection
         }
         .formStyle(.grouped)
-        .frame(minWidth: 420, minHeight: 380)
+        .frame(minWidth: 420, minHeight: 480)
     }
 
     // MARK: - Sections
@@ -75,6 +76,60 @@ struct SettingsView: View {
                         .disabled(newIgnoreApp.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var hotkeysSection: some View {
+        Section("Hotkeys") {
+            Toggle("Enabled", isOn: binding(\.hotkeys.enabled))
+
+            if configManager.config.hotkeys.enabled {
+                let bindings = configManager.config.hotkeys.bindings
+                if bindings.isEmpty {
+                    Text("No hotkeys configured. Edit config.yaml to add bindings.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(Array(bindings.enumerated()), id: \.offset) { _, binding in
+                        HStack {
+                            Text(describeHotkey(binding.hotkey))
+                                .font(.system(.body, design: .monospaced))
+                            Spacer()
+                            Text(describeAction(binding.action))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
+                Text("Configure bindings in ~/.config/window-manager/config.yaml")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    private func describeHotkey(_ hotkey: Hotkey) -> String {
+        var parts: [String] = []
+        let sortedMods = hotkey.modifiers.sorted { $0.rawValue < $1.rawValue }
+        for mod in sortedMods {
+            switch mod {
+            case .ctrl:  parts.append("Ctrl")
+            case .alt:   parts.append("Alt")
+            case .shift: parts.append("Shift")
+            case .cmd:   parts.append("Cmd")
+            }
+        }
+        parts.append(hotkey.key.uppercased())
+        return parts.joined(separator: " + ")
+    }
+
+    private func describeAction(_ action: Action) -> String {
+        switch action {
+        case .focusSpace(let i):        return "Focus space \(i)"
+        case .moveWindowToSpace(let i): return "Move to space \(i)"
+        case .focusSpaceNext:           return "Next space"
+        case .focusSpacePrev:           return "Previous space"
         }
     }
 

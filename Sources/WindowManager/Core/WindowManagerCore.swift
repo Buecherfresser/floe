@@ -7,9 +7,13 @@ final class WindowManagerCore: ObservableObject {
     let accessibilityService: AccessibilityService
 
     private var focusFollowsMouse: FocusFollowsMouse?
+    private var hotkeyService: HotkeyService?
+    private let spacesService = SpacesService()
+    private lazy var actionDispatcher = ActionDispatcher(spacesService: spacesService)
     private var cancellables = Set<AnyCancellable>()
 
     @Published private(set) var isRunning = false
+    @Published private(set) var hotkeysActive = false
 
     init(configManager: ConfigManager, accessibilityService: AccessibilityService) {
         self.configManager = configManager
@@ -37,6 +41,7 @@ final class WindowManagerCore: ObservableObject {
     func stop() {
         focusFollowsMouse?.stop()
         focusFollowsMouse = nil
+        stopHotkeys()
         isRunning = false
     }
 
@@ -46,8 +51,15 @@ final class WindowManagerCore: ObservableObject {
 
     private func applyConfig(_ config: Configuration) {
         Log.isEnabled = config.debug
-        Log.info("Core: applyConfig debug=\(config.debug) ffm.enabled=\(config.focusFollowsMouse.enabled) trusted=\(accessibilityService.isTrusted)")
+        Log.info("Core: applyConfig debug=\(config.debug) ffm.enabled=\(config.focusFollowsMouse.enabled) hotkeys.enabled=\(config.hotkeys.enabled) trusted=\(accessibilityService.isTrusted)")
 
+        applyFocusFollowsMouse(config)
+        applyHotkeys(config)
+    }
+
+    // MARK: - Focus Follows Mouse
+
+    private func applyFocusFollowsMouse(_ config: Configuration) {
         if config.focusFollowsMouse.enabled && accessibilityService.isTrusted {
             if let ffm = focusFollowsMouse {
                 ffm.config = config.focusFollowsMouse
@@ -63,9 +75,37 @@ final class WindowManagerCore: ObservableObject {
         } else {
             focusFollowsMouse?.stop()
             focusFollowsMouse = nil
-            if !config.focusFollowsMouse.enabled {
+            if !config.focusFollowsMouse.enabled && !config.hotkeys.enabled {
                 isRunning = false
             }
         }
+    }
+
+    // MARK: - Hotkeys
+
+    private func applyHotkeys(_ config: Configuration) {
+        if config.hotkeys.enabled && accessibilityService.isTrusted {
+            if let hks = hotkeyService {
+                hks.updateBindings(config.hotkeys.bindings)
+            } else {
+                let dispatcher = actionDispatcher
+                let hks = HotkeyService { action in
+                    dispatcher.dispatch(action)
+                }
+                hks.updateBindings(config.hotkeys.bindings)
+                hks.start()
+                hotkeyService = hks
+            }
+            hotkeysActive = true
+            isRunning = true
+        } else {
+            stopHotkeys()
+        }
+    }
+
+    private func stopHotkeys() {
+        hotkeyService?.stop()
+        hotkeyService = nil
+        hotkeysActive = false
     }
 }

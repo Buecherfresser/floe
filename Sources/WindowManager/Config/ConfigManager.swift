@@ -52,11 +52,32 @@ final class ConfigManager: ObservableObject {
             }
         }
 
-        guard let yamlString = try? YAMLEncoder().encode(configuration) else { return }
+        var toSave = configuration
+
+        // Never discard hotkey bindings that exist on disk. If the in-memory
+        // config lost its bindings (e.g. due to a decode failure), preserve
+        // whatever the file currently has.
+        if toSave.hotkeys.bindings.isEmpty, let onDisk = loadBindingsFromDisk(), !onDisk.isEmpty {
+            Log.info("ConfigManager: preserving \(onDisk.count) hotkey binding(s) from disk")
+            toSave.hotkeys.bindings = onDisk
+        }
+
+        guard let yamlString = try? YAMLEncoder().encode(toSave) else { return }
         let fm = FileManager.default
         try? fm.createDirectory(at: Self.configDirectory, withIntermediateDirectories: true)
         try? yamlString.write(to: configURL, atomically: true, encoding: .utf8)
-        self.config = configuration
+        self.config = toSave
+    }
+
+    /// Reads just the hotkey bindings from the config file on disk,
+    /// bypassing the in-memory config. Returns nil if the file can't be read.
+    private func loadBindingsFromDisk() -> [HotkeyBinding]? {
+        guard let data = try? Data(contentsOf: configURL),
+              let yaml = String(data: data, encoding: .utf8),
+              let diskConfig = try? YAMLDecoder().decode(Configuration.self, from: yaml) else {
+            return nil
+        }
+        return diskConfig.hotkeys.bindings
     }
 
     func update(_ transform: (inout Configuration) -> Void) {
