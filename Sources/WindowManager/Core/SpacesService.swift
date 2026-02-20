@@ -52,67 +52,15 @@ final class SpacesService: @unchecked Sendable {
 
     // MARK: - Window Movement
 
-    /// Moves the focused window to the space at the given 1-based index
-    /// by simulating a title-bar drag while switching spaces.
+    /// Moves the focused window to the space at the given 1-based index.
+    /// TODO: CGS space APIs are neutered on modern macOS without SIP,
+    /// and mouse-drag simulation needs further work. For now this is a no-op.
     func moveWindowToSpace(at index: Int) {
         guard index >= 1, index <= 10 else {
             Log.error("Spaces: moveWindowToSpace index \(index) out of range 1-10")
             return
         }
-
-        guard let win = focusedWindowFrame() else {
-            Log.error("Spaces: no focused window to move")
-            return
-        }
-
-        let digit = index == 10 ? "0" : "\(index)"
-        guard let keyCode = KeyCode.from(digit) else {
-            Log.error("Spaces: no keycode for \"\(digit)\"")
-            return
-        }
-
-        Log.info("Spaces: moving focused window to space \(index) via drag + Ctrl+\(digit)")
-        dragWindowToSpace(frame: win, keyCode: keyCode)
-    }
-
-    // MARK: - Mouse-Drag Space Movement
-
-    /// Grabs the window title bar, switches space while dragging, then releases.
-    private func dragWindowToSpace(frame: CGRect, keyCode: CGKeyCode) {
-        let titleBarPoint = CGPoint(x: frame.midX, y: frame.minY + 12)
-        let savedMouse = CGEvent(source: nil)?.location ?? titleBarPoint
-        let source = CGEventSource(stateID: .combinedSessionState)
-
-        // Move mouse to title bar
-        if let move = CGEvent(mouseEventSource: source, mouseType: .mouseMoved,
-                              mouseCursorPosition: titleBarPoint, mouseButton: .left) {
-            move.post(tap: .cghidEventTap)
-        }
-        usleep(10_000) // 10ms
-
-        // Mouse down on title bar
-        if let down = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown,
-                              mouseCursorPosition: titleBarPoint, mouseButton: .left) {
-            down.post(tap: .cghidEventTap)
-        }
-        usleep(50_000) // 50ms for the drag to register
-
-        // Switch space while dragging (window follows)
-        postSyntheticKey(keyCode: keyCode, flags: .maskControl)
-        usleep(300_000) // 300ms for space transition
-
-        // Mouse up to release the window
-        if let up = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp,
-                            mouseCursorPosition: titleBarPoint, mouseButton: .left) {
-            up.post(tap: .cghidEventTap)
-        }
-        usleep(10_000)
-
-        // Restore mouse position
-        if let restore = CGEvent(mouseEventSource: source, mouseType: .mouseMoved,
-                                 mouseCursorPosition: savedMouse, mouseButton: .left) {
-            restore.post(tap: .cghidEventTap)
-        }
+        Log.info("Spaces: moveWindowToSpace(\(index)) — not yet implemented on this macOS version")
     }
 
     // MARK: - Focused Window
