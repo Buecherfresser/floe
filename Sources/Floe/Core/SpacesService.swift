@@ -22,8 +22,9 @@ private let kKeyHoldDelay: useconds_t = 20_000 // 20 ms
 /// the window server just needs a moment to commit the space change.
 private let kSpaceAnimationDelay: useconds_t = 50_000 // 50 ms
 
-/// Vertical offset from window origin to approximate the title bar centre.
-private let kTitleBarOffset: CGFloat = 12
+/// Vertical offset from window top edge — the second pixel from the top
+/// avoids hitting buttons, URL bars, or other controls in the title bar.
+private let kTitleBarOffset: CGFloat = 2
 
 /// Pixels to nudge the mouse during the drag to initiate a window grab.
 private let kDragNudge: CGFloat = 1
@@ -199,6 +200,7 @@ final class SpacesService: @unchecked Sendable {
             x: frame.midX,
             y: frame.origin.y + kTitleBarOffset
         )
+
         let dragPoint = CGPoint(
             x: clickPoint.x + kDragNudge,
             y: clickPoint.y
@@ -253,13 +255,14 @@ final class SpacesService: @unchecked Sendable {
             x: frame.midX,
             y: frame.origin.y + kTitleBarOffset
         )
+
         let dragPoint = CGPoint(
             x: clickPoint.x + kDragNudge,
             y: clickPoint.y
         )
 
         DispatchQueue.global(qos: .userInteractive).async { [self] in
-            // 1. Mouse-down on the title bar.
+            // 1. Mouse-down near the very top of the window (avoids buttons/URL bars).
             postMouseEvent(.leftMouseDown, at: clickPoint)
             usleep(kMouseDownSettleDelay)
 

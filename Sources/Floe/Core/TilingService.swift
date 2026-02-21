@@ -101,7 +101,14 @@ final class TilingService: @unchecked Sendable {
             self?.scheduleRetile()
         }
 
-        workspaceObservers = [launchObs, terminateObs, activateObs]
+        let spaceChangeObs = nc.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.scheduleRetile()
+        }
+
+        workspaceObservers = [launchObs, terminateObs, activateObs, spaceChangeObs]
     }
 
     private func unregisterWorkspaceObservers() {
