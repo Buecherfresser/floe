@@ -17,7 +17,7 @@ final class FocusFollowsMouse: @unchecked Sendable {
     private var eventTapService: EventTapService?
 
     // All throttle state is accessed exclusively on throttleQueue
-    private let throttleQueue = DispatchQueue(label: "com.windowmanager.focus-throttle")
+    private let throttleQueue = DispatchQueue(label: "com.jonasdrechsel.floe.focus-throttle")
     private var lastFocusedWindowID: CGWindowID = 0
     private var lastLookupTime: UInt64 = 0
     private var trailingWorkItem: DispatchWorkItem?

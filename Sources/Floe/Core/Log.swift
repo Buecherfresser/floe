@@ -2,7 +2,7 @@ import Foundation
 import os.log
 
 enum Log {
-    private static let logger = os.Logger(subsystem: "com.windowmanager", category: "default")
+    private static let logger = os.Logger(subsystem: "com.jonasdrechsel.floe", category: "default")
 
     nonisolated(unsafe) static var isEnabled = false
 

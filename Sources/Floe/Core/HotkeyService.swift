@@ -52,7 +52,7 @@ final class HotkeyService: @unchecked Sendable {
         let thread = Thread { [weak self] in
             self?.runEventTap()
         }
-        thread.name = "com.windowmanager.hotkeys"
+        thread.name = "com.jonasdrechsel.floe.hotkeys"
         thread.qualityOfService = .userInteractive
         thread.start()
         tapThread = thread

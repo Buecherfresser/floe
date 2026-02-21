@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct MenuBarView: View {
-    @EnvironmentObject private var core: WindowManagerCore
+    @EnvironmentObject private var core: FloeCore
     @EnvironmentObject private var accessibilityService: AccessibilityService
 
     var body: some View {

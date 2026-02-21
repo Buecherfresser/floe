@@ -2,7 +2,7 @@ import SwiftUI
 
 struct OnboardingView: View {
     @EnvironmentObject private var accessibilityService: AccessibilityService
-    @EnvironmentObject private var core: WindowManagerCore
+    @EnvironmentObject private var core: FloeCore
     @Environment(\.dismissWindow) private var dismissWindow
 
     var body: some View {
@@ -23,7 +23,7 @@ struct OnboardingView: View {
             Image(systemName: "macwindow.on.rectangle")
                 .font(.system(size: 48))
                 .foregroundStyle(.tint)
-            Text("Window Manager")
+            Text("Floe")
                 .font(.title.bold())
             Text("A lightweight tiling window manager for macOS")
                 .font(.subheadline)
@@ -46,7 +46,7 @@ struct OnboardingView: View {
                             .font(.headline)
                         Text(accessibilityService.isTrusted
                              ? "Permission granted. You're all set."
-                             : "Window Manager needs accessibility access to focus and manage windows.")
+                             : "Floe needs accessibility access to focus and manage windows.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

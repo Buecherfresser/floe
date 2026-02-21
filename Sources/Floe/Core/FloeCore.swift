@@ -2,7 +2,7 @@ import Foundation
 import Combine
 
 @MainActor
-final class WindowManagerCore: ObservableObject {
+final class FloeCore: ObservableObject {
     let configManager: ConfigManager
     let accessibilityService: AccessibilityService
 

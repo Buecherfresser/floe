@@ -4,7 +4,7 @@ import SwiftUI
 final class AppState: ObservableObject {
     let configManager = ConfigManager()
     let accessibilityService = AccessibilityService()
-    lazy var core = WindowManagerCore(
+    lazy var core = FloeCore(
         configManager: configManager,
         accessibilityService: accessibilityService
     )
@@ -25,7 +25,7 @@ final class AppState: ObservableObject {
 }
 
 @main
-struct WindowManagerApp: App {
+struct FloeApp: App {
     @StateObject private var appState = AppState()
     @Environment(\.openWindow) private var openWindow
 

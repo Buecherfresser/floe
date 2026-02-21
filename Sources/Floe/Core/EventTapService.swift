@@ -25,7 +25,7 @@ final class EventTapService: @unchecked Sendable {
         let thread = Thread { [weak self] in
             self?.runEventTap()
         }
-        thread.name = "com.windowmanager.eventtap"
+        thread.name = "com.jonasdrechsel.floe.eventtap"
         thread.qualityOfService = .userInteractive
         thread.start()
         tapThread = thread

@@ -13,7 +13,7 @@ final class ConfigManager: ObservableObject {
 
     static let configDirectory: URL = {
         let home = FileManager.default.homeDirectoryForCurrentUser
-        return home.appendingPathComponent(".config/window-manager", isDirectory: true)
+        return home.appendingPathComponent(".config/floe", isDirectory: true)
     }()
 
     init() {
@@ -28,8 +28,26 @@ final class ConfigManager: ObservableObject {
         fileWatcher = nil
     }
 
+    private static let legacyDirectory: URL = {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        return home.appendingPathComponent(".config/window-manager", isDirectory: true)
+    }()
+
+    private func migrateFromLegacyIfNeeded() {
+        let fm = FileManager.default
+        let legacyConfig = Self.legacyDirectory.appendingPathComponent("config.yaml")
+        guard fm.fileExists(atPath: legacyConfig.path),
+              !fm.fileExists(atPath: configURL.path) else { return }
+
+        Log.info("ConfigManager: migrating config from \(Self.legacyDirectory.path) to \(Self.configDirectory.path)")
+        try? fm.createDirectory(at: Self.configDirectory, withIntermediateDirectories: true)
+        try? fm.moveItem(at: legacyConfig, to: configURL)
+        try? fm.removeItem(at: Self.legacyDirectory)
+    }
+
     private func loadOrCreate() -> Configuration {
         let fm = FileManager.default
+        migrateFromLegacyIfNeeded()
         if !fm.fileExists(atPath: configURL.path) {
             try? fm.createDirectory(at: Self.configDirectory, withIntermediateDirectories: true)
             save(.default)

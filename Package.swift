@@ -3,7 +3,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "WindowManager",
+    name: "Floe",
     platforms: [
         .macOS(.v26)
     ],
@@ -12,9 +12,9 @@ let package = Package(
     ],
     targets: [
         .executableTarget(
-            name: "WindowManager",
+            name: "Floe",
             dependencies: ["Yams"],
-            path: "Sources/WindowManager"
+            path: "Sources/Floe"
         ),
     ]
 )

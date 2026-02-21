@@ -3,7 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject private var configManager: ConfigManager
     @EnvironmentObject private var accessibilityService: AccessibilityService
-    @EnvironmentObject private var core: WindowManagerCore
+    @EnvironmentObject private var core: FloeCore
 
     @State private var newIgnoreApp = ""
     @State private var newRuleApp = ""
@@ -106,7 +106,7 @@ struct SettingsView: View {
                     }
                 }
 
-                Text("Configure bindings in ~/.config/window-manager/config.yaml")
+                Text("Configure bindings in ~/.config/floe/config.yaml")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
@@ -230,7 +230,7 @@ struct SettingsView: View {
     private var advancedSection: some View {
         Section("Advanced") {
             Toggle("Debug logging", isOn: binding(\.debug))
-            Text("Prints detailed logs to stdout. View with: swift run 2>&1")
+            Text("Prints detailed logs to stdout.")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
         }

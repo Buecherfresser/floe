@@ -25,7 +25,7 @@ final class TilingService: @unchecked Sendable {
 
     private var workspaceObservers: [NSObjectProtocol] = []
 
-    private let retileQueue = DispatchQueue(label: "com.windowmanager.tiling")
+    private let retileQueue = DispatchQueue(label: "com.jonasdrechsel.floe.tiling")
     private var pendingRetile: DispatchWorkItem?
 
     private static let ownPID = ProcessInfo.processInfo.processIdentifier
