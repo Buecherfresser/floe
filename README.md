@@ -17,9 +17,24 @@ A lightweight tiling window manager for macOS.
 
 ## Build & Run
 
+Development:
+
 ```bash
 swift build
 swift run Floe
+```
+
+Release (produces `dist/Floe.app`):
+
+```bash
+./scripts/build-release.sh 0.1.0
+```
+
+Install:
+
+```bash
+cp -R dist/Floe.app /Applications/
+open /Applications/Floe.app
 ```
 
 ## Configuration
