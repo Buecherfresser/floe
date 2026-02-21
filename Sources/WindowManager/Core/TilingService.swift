@@ -12,8 +12,12 @@ final class TilingService: @unchecked Sendable {
         set { lock.withLock { _config = newValue }; scheduleRetile() }
     }
 
-    /// Ordered list of tracked window IDs — insertion order determines BSP position.
+    /// Ordered list of ALL tracked window IDs — insertion order determines BSP position.
+    /// Windows are never removed here except on app termination, so that switching
+    /// spaces and coming back preserves the original tiling order.
     private var trackedWindowIDs: [CGWindowID] = []
+    /// Tracks which PID owns each tracked window, for cleanup on app termination.
+    private var windowOwners: [CGWindowID: pid_t] = [:]
     /// Maps CGWindowID -> AXUIElement for frame manipulation.
     private var windowElements: [CGWindowID: AXUIElement] = [:]
     /// Maps pid_t -> AXObserver for per-app window event observation.
@@ -53,6 +57,7 @@ final class TilingService: @unchecked Sendable {
         pendingRetile = nil
         lock.withLock {
             trackedWindowIDs.removeAll()
+            windowOwners.removeAll()
             windowElements.removeAll()
         }
     }
@@ -81,10 +86,12 @@ final class TilingService: @unchecked Sendable {
             forName: NSWorkspace.didTerminateApplicationNotification,
             object: nil, queue: .main
         ) { [weak self] notification in
-            guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
-            Log.debug("Tiling: app terminated — \(app.localizedName ?? "?") pid=\(app.processIdentifier)")
-            self?.unregisterAXObserver(for: app.processIdentifier)
-            self?.scheduleRetile()
+            guard let self, let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+            let pid = app.processIdentifier
+            Log.debug("Tiling: app terminated — \(app.localizedName ?? "?") pid=\(pid)")
+            self.unregisterAXObserver(for: pid)
+            self.removeTrackedWindows(for: pid)
+            self.scheduleRetile()
         }
 
         let activateObs = nc.addObserver(
@@ -129,13 +136,13 @@ final class TilingService: @unchecked Sendable {
 
         let appElement = AXUIElementCreateApplication(pid)
 
+        // Only observe structural changes. Move/resize notifications are skipped
+        // because our own setWindowFrame calls would trigger infinite retile loops.
         let notifications: [String] = [
             kAXWindowCreatedNotification,
             kAXUIElementDestroyedNotification,
             kAXWindowMiniaturizedNotification,
             kAXWindowDeminiaturizedNotification,
-            kAXWindowMovedNotification,
-            kAXWindowResizedNotification,
         ]
 
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
@@ -166,6 +173,19 @@ final class TilingService: @unchecked Sendable {
                 Log.debug("Tiling: unregistered AXObserver for pid=\(pid)")
             }
             axObservers.removeAll()
+        }
+    }
+
+    /// Removes all tracked windows belonging to a terminated app.
+    private func removeTrackedWindows(for pid: pid_t) {
+        lock.withLock {
+            let toRemove = windowOwners.filter { $0.value == pid }.map(\.key)
+            for wid in toRemove {
+                trackedWindowIDs.removeAll { $0 == wid }
+                windowOwners.removeValue(forKey: wid)
+                windowElements.removeValue(forKey: wid)
+            }
+            Log.debug("Tiling: removed \(toRemove.count) tracked window(s) for pid=\(pid)")
         }
     }
 
@@ -212,25 +232,27 @@ final class TilingService: @unchecked Sendable {
 
         guard !tileableWindows.isEmpty else { return }
 
-        let windowIDs = tileableWindows.map(\.windowID)
+        let visibleIDs = Set(tileableWindows.map(\.windowID))
 
-        // Reconcile tracked order: keep existing order, append new windows, remove gone ones
+        // Append newly discovered windows — never remove existing ones (they may
+        // just be on another space and will reappear when the user switches back).
         lock.lock()
-        var newTracked: [CGWindowID] = []
-        for wid in trackedWindowIDs {
-            if windowIDs.contains(wid) { newTracked.append(wid) }
+        for tw in tileableWindows {
+            if !trackedWindowIDs.contains(tw.windowID) {
+                trackedWindowIDs.append(tw.windowID)
+                windowOwners[tw.windowID] = tw.pid
+            }
         }
-        for wid in windowIDs {
-            if !newTracked.contains(wid) { newTracked.append(wid) }
-        }
-        trackedWindowIDs = newTracked
 
         var newElements: [CGWindowID: AXUIElement] = [:]
         for tw in tileableWindows {
             newElements[tw.windowID] = tw.element
         }
         windowElements = newElements
-        let orderedIDs = trackedWindowIDs
+
+        // Build the BSP tree only from windows currently visible on this space,
+        // but preserve their original insertion order from trackedWindowIDs.
+        let orderedIDs = trackedWindowIDs.filter { visibleIDs.contains($0) }
         lock.unlock()
 
         let buildFn: ([CGWindowID]) -> BSPNode? = cfg.autoBalance
