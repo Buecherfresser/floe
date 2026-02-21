@@ -3,6 +3,8 @@ import Foundation
 /// Routes hotkey actions to the appropriate service.
 final class ActionDispatcher: @unchecked Sendable {
     private let spacesService: SpacesService
+    var tilingService: TilingService?
+    var configManager: ConfigManager?
 
     init(spacesService: SpacesService) {
         self.spacesService = spacesService
@@ -29,16 +31,26 @@ final class ActionDispatcher: @unchecked Sendable {
             spacesService.focusPreviousSpace()
 
         case .toggleTiling:
-            Log.info("ActionDispatcher: toggleTiling not yet implemented")
+            DispatchQueue.main.async { [weak self] in
+                self?.configManager?.update { $0.tiling.enabled.toggle() }
+            }
 
         case .balanceWindows:
-            Log.info("ActionDispatcher: balanceWindows not yet implemented")
+            tilingService?.retile()
 
         case .increaseSplitRatio:
-            Log.info("ActionDispatcher: increaseSplitRatio not yet implemented")
+            DispatchQueue.main.async { [weak self] in
+                self?.configManager?.update {
+                    $0.tiling.splitRatio = min(0.9, $0.tiling.splitRatio + 0.05)
+                }
+            }
 
         case .decreaseSplitRatio:
-            Log.info("ActionDispatcher: decreaseSplitRatio not yet implemented")
+            DispatchQueue.main.async { [weak self] in
+                self?.configManager?.update {
+                    $0.tiling.splitRatio = max(0.1, $0.tiling.splitRatio - 0.05)
+                }
+            }
         }
     }
 }

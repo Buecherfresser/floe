@@ -96,4 +96,93 @@ final class AccessibilityService: ObservableObject {
         guard let frontApp = NSWorkspace.shared.frontmostApplication else { return nil }
         return frontApp.processIdentifier
     }
+
+    // MARK: - Window Frame Manipulation
+
+    /// Sets the position and size of an AX window element.
+    nonisolated func setWindowFrame(element: AXUIElement, frame: CGRect) {
+        var position = frame.origin
+        var size = CGSize(width: frame.width, height: frame.height)
+
+        if let posValue = AXValueCreate(.cgPoint, &position) {
+            let posResult = AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, posValue)
+            if posResult != .success {
+                Log.debug("AX: setWindowFrame position failed (\(posResult.rawValue))")
+            }
+        }
+
+        if let sizeValue = AXValueCreate(.cgSize, &size) {
+            let sizeResult = AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, sizeValue)
+            if sizeResult != .success {
+                Log.debug("AX: setWindowFrame size failed (\(sizeResult.rawValue))")
+            }
+        }
+
+        // Set position again after resize — some apps adjust origin when resized
+        if let posValue = AXValueCreate(.cgPoint, &position) {
+            AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, posValue)
+        }
+    }
+
+    /// Returns AXUIElement windows for a given PID along with their current frames.
+    nonisolated func windows(for pid: pid_t) -> [(element: AXUIElement, frame: CGRect)] {
+        let app = AXUIElementCreateApplication(pid)
+
+        var windowsRef: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windowsRef)
+        guard result == .success, let axWindows = windowsRef as? [AXUIElement] else {
+            return []
+        }
+
+        var results: [(element: AXUIElement, frame: CGRect)] = []
+        for window in axWindows {
+            // Skip minimized windows
+            var minimizedRef: CFTypeRef?
+            if AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &minimizedRef) == .success,
+               let minimized = minimizedRef as? Bool, minimized {
+                continue
+            }
+
+            guard let frame = windowFrame(of: window) else { continue }
+            results.append((element: window, frame: frame))
+        }
+        return results
+    }
+
+    /// Reads the current position and size of an AX window element.
+    nonisolated func windowFrame(of element: AXUIElement) -> CGRect? {
+        var posRef: CFTypeRef?
+        var sizeRef: CFTypeRef?
+
+        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posRef) == .success,
+              AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeRef) == .success,
+              let posVal = posRef, let sizeVal = sizeRef else {
+            return nil
+        }
+
+        var position = CGPoint.zero
+        var size = CGSize.zero
+        AXValueGetValue(posVal as! AXValue, .cgPoint, &position)
+        AXValueGetValue(sizeVal as! AXValue, .cgSize, &size)
+
+        return CGRect(origin: position, size: size)
+    }
+
+    /// Checks if an AX window element has the standard window subrole (not a dialog, sheet, etc.).
+    nonisolated func isStandardWindow(_ element: AXUIElement) -> Bool {
+        var roleRef: CFTypeRef?
+        var subroleRef: CFTypeRef?
+
+        guard AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRef) == .success,
+              let role = roleRef as? String, role == kAXWindowRole as String else {
+            return false
+        }
+
+        if AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &subroleRef) == .success,
+           let subrole = subroleRef as? String {
+            return subrole == kAXStandardWindowSubrole as String
+        }
+
+        return true
+    }
 }

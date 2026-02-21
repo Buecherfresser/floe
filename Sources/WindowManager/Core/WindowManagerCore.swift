@@ -8,6 +8,7 @@ final class WindowManagerCore: ObservableObject {
 
     private var focusFollowsMouse: FocusFollowsMouse?
     private var hotkeyService: HotkeyService?
+    private var tilingService: TilingService?
     private let spacesService = SpacesService()
     private lazy var actionDispatcher = ActionDispatcher(spacesService: spacesService)
     private var cancellables = Set<AnyCancellable>()
@@ -47,6 +48,7 @@ final class WindowManagerCore: ObservableObject {
         focusFollowsMouse?.stop()
         focusFollowsMouse = nil
         stopHotkeys()
+        stopTiling()
         isRunning = false
     }
 
@@ -61,6 +63,7 @@ final class WindowManagerCore: ObservableObject {
         spacesService.moveMethod = config.spaces.moveMethod
         applyFocusFollowsMouse(config)
         applyHotkeys(config)
+        applyTiling(config)
     }
 
     // MARK: - Focus Follows Mouse
@@ -113,5 +116,33 @@ final class WindowManagerCore: ObservableObject {
         hotkeyService?.stop()
         hotkeyService = nil
         hotkeysActive = false
+    }
+
+    // MARK: - Tiling
+
+    private func applyTiling(_ config: Configuration) {
+        if config.tiling.enabled && accessibilityService.isTrusted {
+            if let ts = tilingService {
+                ts.config = config.tiling
+            } else {
+                let ts = TilingService(
+                    accessibilityService: accessibilityService,
+                    config: config.tiling
+                )
+                tilingService = ts
+                actionDispatcher.tilingService = ts
+                actionDispatcher.configManager = configManager
+                ts.start()
+            }
+            isRunning = true
+        } else {
+            stopTiling()
+        }
+    }
+
+    private func stopTiling() {
+        tilingService?.stop()
+        tilingService = nil
+        actionDispatcher.tilingService = nil
     }
 }
