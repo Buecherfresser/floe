@@ -15,8 +15,6 @@ final class WindowManagerCore: ObservableObject {
 
     @Published private(set) var isRunning = false
     @Published private(set) var hotkeysActive = false
-    @Published private(set) var sipStatus: SIPStatus = .unknown
-    @Published private(set) var cgsAvailable = false
 
     init(configManager: ConfigManager, accessibilityService: AccessibilityService) {
         self.configManager = configManager
@@ -37,9 +35,6 @@ final class WindowManagerCore: ObservableObject {
             return
         }
         Log.info("Core: starting")
-        spacesService.verifyCGSAvailability()
-        sipStatus = spacesService.sipStatus
-        cgsAvailable = spacesService.cgsVerified
         applyConfig(configManager.config)
         isRunning = true
     }
@@ -60,7 +55,6 @@ final class WindowManagerCore: ObservableObject {
         Log.isEnabled = config.debug
         Log.info("Core: applyConfig debug=\(config.debug) ffm.enabled=\(config.focusFollowsMouse.enabled) hotkeys.enabled=\(config.hotkeys.enabled) trusted=\(accessibilityService.isTrusted)")
 
-        spacesService.moveMethod = config.spaces.moveMethod
         applyFocusFollowsMouse(config)
         applyHotkeys(config)
         applyTiling(config)

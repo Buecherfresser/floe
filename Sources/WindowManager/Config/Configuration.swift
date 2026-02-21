@@ -182,24 +182,6 @@ struct HotkeysConfig: Codable, Equatable, Sendable {
     static let `default` = HotkeysConfig(enabled: false, bindings: [])
 }
 
-// MARK: - Spaces
-
-/// Strategy for moving windows between spaces.
-enum SpaceMoveMethod: String, Codable, Equatable, Sendable {
-    /// Try CGS private APIs first; fall back to mouse-drag simulation.
-    case auto
-    /// Always use mouse-drag simulation (works without SIP).
-    case mouseDrag
-    /// Always use CGS private APIs (requires SIP disabled on macOS 15+).
-    case cgsPrivateAPI
-}
-
-struct SpacesConfig: Codable, Equatable, Sendable {
-    var moveMethod: SpaceMoveMethod
-
-    static let `default` = SpacesConfig(moveMethod: .mouseDrag)
-}
-
 // MARK: - Tiling
 
 struct TilingGaps: Codable, Equatable, Sendable {
@@ -235,14 +217,12 @@ struct TilingConfig: Codable, Equatable, Sendable {
 struct Configuration: Equatable, Sendable {
     var focusFollowsMouse: FocusFollowsMouseConfig
     var hotkeys: HotkeysConfig
-    var spaces: SpacesConfig
     var tiling: TilingConfig
     var debug: Bool
 
     static let `default` = Configuration(
         focusFollowsMouse: .default,
         hotkeys: .default,
-        spaces: .default,
         tiling: .default,
         debug: false
     )
@@ -250,14 +230,13 @@ struct Configuration: Equatable, Sendable {
 
 extension Configuration: Codable {
     private enum CodingKeys: String, CodingKey {
-        case focusFollowsMouse, hotkeys, spaces, tiling, debug
+        case focusFollowsMouse, hotkeys, tiling, debug
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         focusFollowsMouse = try c.decodeIfPresent(FocusFollowsMouseConfig.self, forKey: .focusFollowsMouse) ?? .default
         hotkeys = try c.decodeIfPresent(HotkeysConfig.self, forKey: .hotkeys) ?? .default
-        spaces = try c.decodeIfPresent(SpacesConfig.self, forKey: .spaces) ?? .default
         tiling = try c.decodeIfPresent(TilingConfig.self, forKey: .tiling) ?? .default
         debug = try c.decodeIfPresent(Bool.self, forKey: .debug) ?? false
     }
