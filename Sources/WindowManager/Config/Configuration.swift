@@ -58,6 +58,10 @@ enum Action: Equatable, Sendable {
     case moveWindowToSpacePrev
     case focusSpaceNext
     case focusSpacePrev
+    case toggleTiling
+    case balanceWindows
+    case increaseSplitRatio
+    case decreaseSplitRatio
 }
 
 extension Action: Codable {
@@ -65,6 +69,8 @@ extension Action: Codable {
         case focusSpace, moveWindowToSpace
         case moveWindowToSpaceNext, moveWindowToSpacePrev
         case focusSpaceNext, focusSpacePrev
+        case toggleTiling, balanceWindows
+        case increaseSplitRatio, decreaseSplitRatio
     }
 
     init(from decoder: Decoder) throws {
@@ -80,6 +86,10 @@ extension Action: Codable {
             if keyed.contains(.moveWindowToSpacePrev) { self = .moveWindowToSpacePrev; return }
             if keyed.contains(.focusSpaceNext) { self = .focusSpaceNext; return }
             if keyed.contains(.focusSpacePrev) { self = .focusSpacePrev; return }
+            if keyed.contains(.toggleTiling) { self = .toggleTiling; return }
+            if keyed.contains(.balanceWindows) { self = .balanceWindows; return }
+            if keyed.contains(.increaseSplitRatio) { self = .increaseSplitRatio; return }
+            if keyed.contains(.decreaseSplitRatio) { self = .decreaseSplitRatio; return }
         }
 
         // Plain string for parameterless actions
@@ -90,6 +100,10 @@ extension Action: Codable {
             case "moveWindowToSpacePrev": self = .moveWindowToSpacePrev; return
             case "focusSpaceNext": self = .focusSpaceNext; return
             case "focusSpacePrev": self = .focusSpacePrev; return
+            case "toggleTiling": self = .toggleTiling; return
+            case "balanceWindows": self = .balanceWindows; return
+            case "increaseSplitRatio": self = .increaseSplitRatio; return
+            case "decreaseSplitRatio": self = .decreaseSplitRatio; return
             default: break
             }
         }
@@ -119,6 +133,18 @@ extension Action: Codable {
         case .focusSpacePrev:
             var c = encoder.singleValueContainer()
             try c.encode("focusSpacePrev")
+        case .toggleTiling:
+            var c = encoder.singleValueContainer()
+            try c.encode("toggleTiling")
+        case .balanceWindows:
+            var c = encoder.singleValueContainer()
+            try c.encode("balanceWindows")
+        case .increaseSplitRatio:
+            var c = encoder.singleValueContainer()
+            try c.encode("increaseSplitRatio")
+        case .decreaseSplitRatio:
+            var c = encoder.singleValueContainer()
+            try c.encode("decreaseSplitRatio")
         }
     }
 }
@@ -153,25 +179,57 @@ struct SpacesConfig: Codable, Equatable, Sendable {
     static let `default` = SpacesConfig(moveMethod: .mouseDrag)
 }
 
+// MARK: - Tiling
+
+struct TilingGaps: Codable, Equatable, Sendable {
+    var inner: Int
+    var outer: Int
+
+    static let `default` = TilingGaps(inner: 8, outer: 8)
+}
+
+struct TilingRule: Codable, Equatable, Sendable {
+    var app: String
+    var tiled: Bool
+}
+
+struct TilingConfig: Codable, Equatable, Sendable {
+    var enabled: Bool
+    var gaps: TilingGaps
+    var splitRatio: Double
+    var autoBalance: Bool
+    var rules: [TilingRule]
+
+    static let `default` = TilingConfig(
+        enabled: false,
+        gaps: .default,
+        splitRatio: 0.5,
+        autoBalance: true,
+        rules: []
+    )
+}
+
 // MARK: - Top-Level Configuration
 
 struct Configuration: Equatable, Sendable {
     var focusFollowsMouse: FocusFollowsMouseConfig
     var hotkeys: HotkeysConfig
     var spaces: SpacesConfig
+    var tiling: TilingConfig
     var debug: Bool
 
     static let `default` = Configuration(
         focusFollowsMouse: .default,
         hotkeys: .default,
         spaces: .default,
+        tiling: .default,
         debug: false
     )
 }
 
 extension Configuration: Codable {
     private enum CodingKeys: String, CodingKey {
-        case focusFollowsMouse, hotkeys, spaces, debug
+        case focusFollowsMouse, hotkeys, spaces, tiling, debug
     }
 
     init(from decoder: Decoder) throws {
@@ -179,6 +237,7 @@ extension Configuration: Codable {
         focusFollowsMouse = try c.decodeIfPresent(FocusFollowsMouseConfig.self, forKey: .focusFollowsMouse) ?? .default
         hotkeys = try c.decodeIfPresent(HotkeysConfig.self, forKey: .hotkeys) ?? .default
         spaces = try c.decodeIfPresent(SpacesConfig.self, forKey: .spaces) ?? .default
+        tiling = try c.decodeIfPresent(TilingConfig.self, forKey: .tiling) ?? .default
         debug = try c.decodeIfPresent(Bool.self, forKey: .debug) ?? false
     }
 }

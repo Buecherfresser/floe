@@ -27,6 +27,18 @@ final class ActionDispatcher: @unchecked Sendable {
 
         case .focusSpacePrev:
             spacesService.focusPreviousSpace()
+
+        case .toggleTiling:
+            Log.info("ActionDispatcher: toggleTiling not yet implemented")
+
+        case .balanceWindows:
+            Log.info("ActionDispatcher: balanceWindows not yet implemented")
+
+        case .increaseSplitRatio:
+            Log.info("ActionDispatcher: increaseSplitRatio not yet implemented")
+
+        case .decreaseSplitRatio:
+            Log.info("ActionDispatcher: decreaseSplitRatio not yet implemented")
         }
     }
 }

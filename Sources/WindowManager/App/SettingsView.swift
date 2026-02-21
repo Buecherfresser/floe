@@ -6,6 +6,8 @@ struct SettingsView: View {
     @EnvironmentObject private var core: WindowManagerCore
 
     @State private var newIgnoreApp = ""
+    @State private var newRuleApp = ""
+    @State private var newRuleTiled = false
 
     var body: some View {
         Form {
@@ -13,6 +15,7 @@ struct SettingsView: View {
             focusFollowsMouseSection
             hotkeysSection
             spacesSection
+            tilingSection
             advancedSection
         }
         .formStyle(.grouped)
@@ -134,6 +137,10 @@ struct SettingsView: View {
         case .moveWindowToSpacePrev:    return "Move window to previous space"
         case .focusSpaceNext:           return "Next space"
         case .focusSpacePrev:           return "Previous space"
+        case .toggleTiling:             return "Toggle tiling"
+        case .balanceWindows:           return "Balance windows"
+        case .increaseSplitRatio:       return "Increase split ratio"
+        case .decreaseSplitRatio:       return "Decrease split ratio"
         }
     }
 
@@ -194,6 +201,86 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
+    private var tilingSection: some View {
+        Section("Tiling") {
+            Toggle("Enabled", isOn: binding(\.tiling.enabled))
+
+            if configManager.config.tiling.enabled {
+                Stepper(value: clampedInnerGap, in: 0...50, step: 1) {
+                    HStack {
+                        Text("Inner gap")
+                        Spacer()
+                        Text("\(configManager.config.tiling.gaps.inner) px")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Stepper(value: clampedOuterGap, in: 0...50, step: 1) {
+                    HStack {
+                        Text("Outer gap")
+                        Spacer()
+                        Text("\(configManager.config.tiling.gaps.outer) px")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                HStack {
+                    Text("Split ratio")
+                    Slider(
+                        value: splitRatioBinding,
+                        in: 0.1...0.9,
+                        step: 0.05
+                    )
+                    Text("\(Int(configManager.config.tiling.splitRatio * 100))%")
+                        .foregroundStyle(.secondary)
+                        .frame(width: 40, alignment: .trailing)
+                }
+
+                Toggle("Auto-balance", isOn: binding(\.tiling.autoBalance))
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("App Rules")
+                        .font(.headline)
+
+                    ForEach(Array(configManager.config.tiling.rules.enumerated()), id: \.offset) { index, rule in
+                        HStack {
+                            Text(rule.app)
+                            Spacer()
+                            Text(rule.tiled ? "Tiled" : "Floating")
+                                .font(.caption)
+                                .foregroundStyle(rule.tiled ? .green : .secondary)
+                            Toggle("", isOn: tilingRuleBinding(at: index))
+                                .toggleStyle(.switch)
+                                .labelsHidden()
+                            Button(role: .destructive) {
+                                configManager.update { config in
+                                    config.tiling.rules.remove(at: index)
+                                }
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                    }
+
+                    HStack {
+                        TextField("App name", text: $newRuleApp)
+                            .onSubmit { addTilingRule() }
+                        Toggle("Tiled", isOn: $newRuleTiled)
+                            .toggleStyle(.switch)
+                        Button("Add") { addTilingRule() }
+                            .disabled(newRuleApp.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+
+                    Text("Apps not listed here will be tiled by default.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
     private var advancedSection: some View {
         Section("Advanced") {
             Toggle("Debug logging", isOn: binding(\.debug))
@@ -234,5 +321,55 @@ struct SettingsView: View {
             }
         }
         newIgnoreApp = ""
+    }
+
+    // MARK: - Tiling Helpers
+
+    private var clampedInnerGap: Binding<Int> {
+        Binding(
+            get: { max(0, min(50, configManager.config.tiling.gaps.inner)) },
+            set: { newValue in
+                configManager.update { $0.tiling.gaps.inner = max(0, min(50, newValue)) }
+            }
+        )
+    }
+
+    private var clampedOuterGap: Binding<Int> {
+        Binding(
+            get: { max(0, min(50, configManager.config.tiling.gaps.outer)) },
+            set: { newValue in
+                configManager.update { $0.tiling.gaps.outer = max(0, min(50, newValue)) }
+            }
+        )
+    }
+
+    private var splitRatioBinding: Binding<Double> {
+        Binding(
+            get: { configManager.config.tiling.splitRatio },
+            set: { newValue in
+                configManager.update { $0.tiling.splitRatio = newValue }
+            }
+        )
+    }
+
+    private func tilingRuleBinding(at index: Int) -> Binding<Bool> {
+        Binding(
+            get: { configManager.config.tiling.rules[index].tiled },
+            set: { newValue in
+                configManager.update { $0.tiling.rules[index].tiled = newValue }
+            }
+        )
+    }
+
+    private func addTilingRule() {
+        let name = newRuleApp.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return }
+        configManager.update { config in
+            if !config.tiling.rules.contains(where: { $0.app == name }) {
+                config.tiling.rules.append(TilingRule(app: name, tiled: newRuleTiled))
+            }
+        }
+        newRuleApp = ""
+        newRuleTiled = false
     }
 }
