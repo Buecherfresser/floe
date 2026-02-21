@@ -301,6 +301,14 @@ final class TilingService: @unchecked Sendable {
             return []
         }
 
+        // Build a set of PIDs with .regular activation policy (real user-facing apps).
+        // This excludes wallpaper engines, menu bar utilities, background agents, etc.
+        let regularPIDs: Set<pid_t> = Set(
+            NSWorkspace.shared.runningApplications
+                .filter { $0.activationPolicy == .regular }
+                .map(\.processIdentifier)
+        )
+
         // Group CG windows by PID so we can match them to AX windows
         struct CGWindowInfo {
             let windowID: CGWindowID
@@ -318,6 +326,7 @@ final class TilingService: @unchecked Sendable {
 
             guard layer == 0 else { continue }
             guard pid != Self.ownPID else { continue }
+            guard regularPIDs.contains(pid) else { continue }
 
             let ownerName = info[kCGWindowOwnerName] as? String
             if let ownerName, Self.ignoredOwners.contains(ownerName) { continue }

@@ -131,16 +131,19 @@ struct SettingsView: View {
 
     private func describeAction(_ action: Action) -> String {
         switch action {
-        case .focusSpace(let i):        return "Focus space \(i)"
-        case .moveWindowToSpace(let i): return "Move to space \(i)"
-        case .moveWindowToSpaceNext:    return "Move window to next space"
-        case .moveWindowToSpacePrev:    return "Move window to previous space"
-        case .focusSpaceNext:           return "Next space"
-        case .focusSpacePrev:           return "Previous space"
-        case .toggleTiling:             return "Toggle tiling"
-        case .balanceWindows:           return "Balance windows"
-        case .increaseSplitRatio:       return "Increase split ratio"
-        case .decreaseSplitRatio:       return "Decrease split ratio"
+        case .focusSpace(let i):                return "Focus space \(i)"
+        case .moveWindowToSpace(let i):         return "Move to space \(i)"
+        case .moveWindowToSpaceNext:            return "Move window to next space"
+        case .moveWindowToSpacePrev:            return "Move window to previous space"
+        case .moveWindowToSpaceAndReturn(let i): return "Move to space \(i) & return"
+        case .moveWindowToSpaceNextAndReturn:   return "Move to next space & return"
+        case .moveWindowToSpacePrevAndReturn:   return "Move to prev space & return"
+        case .focusSpaceNext:                   return "Next space"
+        case .focusSpacePrev:                   return "Previous space"
+        case .toggleTiling:                     return "Toggle tiling"
+        case .balanceWindows:                   return "Balance windows"
+        case .increaseSplitRatio:               return "Increase split ratio"
+        case .decreaseSplitRatio:               return "Decrease split ratio"
         }
     }
 

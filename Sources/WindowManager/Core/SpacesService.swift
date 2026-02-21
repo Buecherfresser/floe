@@ -185,6 +185,144 @@ final class SpacesService: @unchecked Sendable {
         performMouseDragSpaceSwitch(windowFrame: frame, keyCode: keyCode, flags: .maskControl)
     }
 
+    // MARK: - Move Window And Return
+
+    /// Moves the focused window to a specific space, then switches back to the current space.
+    func moveWindowToSpaceAndReturn(at index: Int) {
+        guard index >= 1, index <= 10 else {
+            Log.error("Spaces: moveWindowToSpaceAndReturn index \(index) out of range 1-10")
+            return
+        }
+
+        // CGS path: moveWindow doesn't change the active space, so no return needed.
+        if useCGS, let wid = focusedWindowID() {
+            Log.info("Spaces: moving window \(wid) to space \(index) via CGS (staying on current space)")
+            CGSSpaceService.moveWindow(wid, toSpaceAt: index)
+            return
+        }
+
+        let digit = index == 10 ? "0" : "\(index)"
+        guard let targetKeyCode = KeyCode.from(digit) else {
+            Log.error("Spaces: moveWindowToSpaceAndReturn — no keycode for \"\(digit)\"")
+            return
+        }
+        guard let frame = focusedWindowFrame() else {
+            Log.error("Spaces: moveWindowToSpaceAndReturn — could not determine focused window frame")
+            return
+        }
+
+        // Determine current space index for the return trip
+        let returnIndex = CGSSpaceService.currentSpaceIndex()
+
+        Log.info("Spaces: moving window to space \(index) via drag, then returning to space \(returnIndex.map(String.init) ?? "?")")
+        performMouseDragSpaceSwitchAndReturn(
+            windowFrame: frame,
+            keyCode: targetKeyCode,
+            flags: .maskControl,
+            returnIndex: returnIndex
+        )
+    }
+
+    /// Moves the focused window to the next space, then switches back.
+    func moveWindowToNextSpaceAndReturn() {
+        if useCGS, let wid = focusedWindowID(), let current = CGSSpaceService.currentSpaceIndex() {
+            let spaces = CGSSpaceService.userSpaceIDs()
+            let next = current < spaces.count ? current + 1 : 1
+            Log.info("Spaces: moving window \(wid) to next space (\(next)) via CGS (staying)")
+            CGSSpaceService.moveWindow(wid, toSpaceAt: next)
+            return
+        }
+
+        guard let keyCode = KeyCode.from("right") else { return }
+        guard let frame = focusedWindowFrame() else {
+            Log.error("Spaces: moveWindowToNextSpaceAndReturn — could not determine focused window frame")
+            return
+        }
+        guard let returnKeyCode = KeyCode.from("left") else { return }
+
+        Log.info("Spaces: moving window to next space via drag, then returning (Ctrl+Left)")
+        performMouseDragSpaceSwitchAndReturn(
+            windowFrame: frame,
+            keyCode: keyCode,
+            flags: .maskControl,
+            returnKeyCode: returnKeyCode,
+            returnFlags: .maskControl
+        )
+    }
+
+    /// Moves the focused window to the previous space, then switches back.
+    func moveWindowToPreviousSpaceAndReturn() {
+        if useCGS, let wid = focusedWindowID(), let current = CGSSpaceService.currentSpaceIndex() {
+            let spaces = CGSSpaceService.userSpaceIDs()
+            let prev = current > 1 ? current - 1 : spaces.count
+            Log.info("Spaces: moving window \(wid) to previous space (\(prev)) via CGS (staying)")
+            CGSSpaceService.moveWindow(wid, toSpaceAt: prev)
+            return
+        }
+
+        guard let keyCode = KeyCode.from("left") else { return }
+        guard let frame = focusedWindowFrame() else {
+            Log.error("Spaces: moveWindowToPreviousSpaceAndReturn — could not determine focused window frame")
+            return
+        }
+        guard let returnKeyCode = KeyCode.from("right") else { return }
+
+        Log.info("Spaces: moving window to previous space via drag, then returning (Ctrl+Right)")
+        performMouseDragSpaceSwitchAndReturn(
+            windowFrame: frame,
+            keyCode: keyCode,
+            flags: .maskControl,
+            returnKeyCode: returnKeyCode,
+            returnFlags: .maskControl
+        )
+    }
+
+    /// Performs the drag, waits for the space animation, then switches back.
+    /// If `returnIndex` is provided, uses Ctrl+digit. Otherwise uses `returnKeyCode`.
+    private func performMouseDragSpaceSwitchAndReturn(
+        windowFrame frame: CGRect,
+        keyCode: CGKeyCode,
+        flags: CGEventFlags,
+        returnIndex: Int? = nil,
+        returnKeyCode: CGKeyCode? = nil,
+        returnFlags: CGEventFlags = .maskControl
+    ) {
+        let clickPoint = CGPoint(
+            x: frame.midX,
+            y: frame.origin.y + kTitleBarOffset
+        )
+        let dragPoint = CGPoint(
+            x: clickPoint.x + kDragNudge,
+            y: clickPoint.y
+        )
+
+        DispatchQueue.global(qos: .userInteractive).async { [self] in
+            // 1–5: Same drag sequence as performMouseDragSpaceSwitch
+            postMouseEvent(.leftMouseDown, at: clickPoint)
+            usleep(kMouseDownSettleDelay)
+            postMouseEvent(.leftMouseDragged, at: dragPoint)
+            usleep(kDragSettleDelay)
+            postSyntheticKeyDown(keyCode: keyCode, flags: flags)
+            usleep(kKeyHoldDelay)
+            postSyntheticKeyUp(keyCode: keyCode, flags: flags)
+            usleep(kSpaceAnimationDelay)
+            postMouseEvent(.leftMouseUp, at: dragPoint)
+
+            // 6: Wait for the space transition to settle, then switch back
+            usleep(kSpaceAnimationDelay)
+
+            if let returnIndex, returnIndex >= 1, returnIndex <= 10 {
+                let digit = returnIndex == 10 ? "0" : "\(returnIndex)"
+                if let retKeyCode = KeyCode.from(digit) {
+                    Log.info("Spaces: returning to space \(returnIndex) via Ctrl+\(digit)")
+                    postSyntheticKey(keyCode: retKeyCode, flags: returnFlags)
+                }
+            } else if let returnKeyCode {
+                postSyntheticKey(keyCode: returnKeyCode, flags: returnFlags)
+            }
+        }
+    }
+
     // MARK: - Mouse-Drag Space Switch
 
     /// Holds the window via a synthetic mouse-down on its title bar, nudges

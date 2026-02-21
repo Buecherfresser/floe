@@ -50,6 +50,15 @@ struct WindowManagerApp: App {
                 .environmentObject(appState.configManager)
                 .environmentObject(appState.accessibilityService)
                 .environmentObject(appState.core)
+                .onAppear {
+                    NSApp.setActivationPolicy(.regular)
+                    NSApp.activate()
+                }
+                .onDisappear {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        NSApp.setActivationPolicy(.accessory)
+                    }
+                }
         }
 
         Window("Welcome", id: "onboarding") {

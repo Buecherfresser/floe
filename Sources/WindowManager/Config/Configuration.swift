@@ -56,6 +56,9 @@ enum Action: Equatable, Sendable {
     case moveWindowToSpace(Int)
     case moveWindowToSpaceNext
     case moveWindowToSpacePrev
+    case moveWindowToSpaceAndReturn(Int)
+    case moveWindowToSpaceNextAndReturn
+    case moveWindowToSpacePrevAndReturn
     case focusSpaceNext
     case focusSpacePrev
     case toggleTiling
@@ -68,6 +71,8 @@ extension Action: Codable {
     private enum CodingKeys: String, CodingKey {
         case focusSpace, moveWindowToSpace
         case moveWindowToSpaceNext, moveWindowToSpacePrev
+        case moveWindowToSpaceAndReturn
+        case moveWindowToSpaceNextAndReturn, moveWindowToSpacePrevAndReturn
         case focusSpaceNext, focusSpacePrev
         case toggleTiling, balanceWindows
         case increaseSplitRatio, decreaseSplitRatio
@@ -82,8 +87,13 @@ extension Action: Codable {
             if let v = try keyed.decodeIfPresent(Int.self, forKey: .moveWindowToSpace) {
                 self = .moveWindowToSpace(v); return
             }
+            if let v = try keyed.decodeIfPresent(Int.self, forKey: .moveWindowToSpaceAndReturn) {
+                self = .moveWindowToSpaceAndReturn(v); return
+            }
             if keyed.contains(.moveWindowToSpaceNext) { self = .moveWindowToSpaceNext; return }
             if keyed.contains(.moveWindowToSpacePrev) { self = .moveWindowToSpacePrev; return }
+            if keyed.contains(.moveWindowToSpaceNextAndReturn) { self = .moveWindowToSpaceNextAndReturn; return }
+            if keyed.contains(.moveWindowToSpacePrevAndReturn) { self = .moveWindowToSpacePrevAndReturn; return }
             if keyed.contains(.focusSpaceNext) { self = .focusSpaceNext; return }
             if keyed.contains(.focusSpacePrev) { self = .focusSpacePrev; return }
             if keyed.contains(.toggleTiling) { self = .toggleTiling; return }
@@ -98,6 +108,8 @@ extension Action: Codable {
             switch str {
             case "moveWindowToSpaceNext": self = .moveWindowToSpaceNext; return
             case "moveWindowToSpacePrev": self = .moveWindowToSpacePrev; return
+            case "moveWindowToSpaceNextAndReturn": self = .moveWindowToSpaceNextAndReturn; return
+            case "moveWindowToSpacePrevAndReturn": self = .moveWindowToSpacePrevAndReturn; return
             case "focusSpaceNext": self = .focusSpaceNext; return
             case "focusSpacePrev": self = .focusSpacePrev; return
             case "toggleTiling": self = .toggleTiling; return
@@ -121,12 +133,21 @@ extension Action: Codable {
         case .moveWindowToSpace(let i):
             var c = encoder.container(keyedBy: CodingKeys.self)
             try c.encode(i, forKey: .moveWindowToSpace)
+        case .moveWindowToSpaceAndReturn(let i):
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(i, forKey: .moveWindowToSpaceAndReturn)
         case .moveWindowToSpaceNext:
             var c = encoder.singleValueContainer()
             try c.encode("moveWindowToSpaceNext")
         case .moveWindowToSpacePrev:
             var c = encoder.singleValueContainer()
             try c.encode("moveWindowToSpacePrev")
+        case .moveWindowToSpaceNextAndReturn:
+            var c = encoder.singleValueContainer()
+            try c.encode("moveWindowToSpaceNextAndReturn")
+        case .moveWindowToSpacePrevAndReturn:
+            var c = encoder.singleValueContainer()
+            try c.encode("moveWindowToSpacePrevAndReturn")
         case .focusSpaceNext:
             var c = encoder.singleValueContainer()
             try c.encode("focusSpaceNext")
