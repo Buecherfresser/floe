@@ -1,5 +1,6 @@
 @preconcurrency import ApplicationServices
 import AppKit
+import SwiftUI
 import Foundation
 
 /// Developer diagnostics, run instead of the app when launched with
@@ -128,6 +129,10 @@ enum Diagnostics {
                 Thread.sleep(forTimeInterval: 0.1)
             }
             return out
+        case "render-settings":
+            // render-settings <directory> — one PNG per Settings tab
+            guard command.count > 1 else { return "usage: render-settings <dir>\n" }
+            return MainActor.assumeIsolated { renderSettings(into: command[1]) }
         case "close":
             // close <app name> — presses the close button of the app's standard windows
             guard command.count > 1,
@@ -273,6 +278,40 @@ enum Diagnostics {
         usleep(150_000)
         post(.leftMouseUp, end)
         usleep(500_000)
+    }
+
+    @MainActor
+    private static func renderSettings(into directory: String) -> String {
+        let configManager = ConfigManager()
+        let accessibility = AccessibilityService()
+        let core = FloeCore(configManager: configManager, accessibilityService: accessibility)
+        let tabs: [(String, AnyView)] = [
+            ("general", AnyView(GeneralSettingsView())),
+            ("tiling", AnyView(TilingSettingsView())),
+            ("hotkeys", AnyView(HotkeysSettingsView())),
+            ("app-switcher", AnyView(AppSwitcherSettingsView())),
+            ("desktops", AnyView(DesktopsSettingsView())),
+        ]
+        var out = ""
+        for (name, view) in tabs {
+            let root = view
+                .environmentObject(configManager)
+                .environmentObject(accessibility)
+                .environmentObject(core)
+                .frame(width: 600, height: 560)
+            let hosting = NSHostingView(rootView: root)
+            hosting.frame = NSRect(x: 0, y: 0, width: 600, height: 560)
+            let window = NSWindow(contentRect: hosting.frame, styleMask: [.titled], backing: .buffered, defer: false)
+            window.contentView = hosting
+            hosting.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+            guard let rep = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else { continue }
+            hosting.cacheDisplay(in: hosting.bounds, to: rep)
+            let path = "\(directory)/\(name).png"
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+            out += "\(path)\n"
+        }
+        return out
     }
 
     // MARK: - AX Helpers
