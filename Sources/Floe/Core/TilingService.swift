@@ -30,6 +30,9 @@ final class TilingService: @unchecked Sendable {
     /// resize asynchronously, so one reading isn't conclusive.
     private var firstRefusal: [CGWindowID: DispatchTime] = [:]
     private static let refusalRecheckDelay: DispatchTimeInterval = .milliseconds(600)
+    /// Apps that snap to a grid (Terminal's character cells) end up this much
+    /// larger than asked. More than that means a real minimum size.
+    private static let roundingTolerance: CGFloat = 20
 
     /// Allowed difference between requested and applied size before a
     /// window counts as unable to fill its tile.
@@ -465,6 +468,12 @@ final class TilingService: @unchecked Sendable {
             for (windowID, frame) in frames {
                 guard let element = newElements[windowID],
                       let actual = accessibilityService.windowFrame(of: element) else { continue }
+                // A window that got smaller than its recorded minimum can go
+                // that small after all.
+                if let minimum = minSizes[windowID],
+                   actual.width < minimum.width - 2 || actual.height < minimum.height - 2 {
+                    minSizes[windowID] = CGSize(width: min(minimum.width, actual.width), height: min(minimum.height, actual.height))
+                }
                 // A minimum size shows as the window staying *larger* than its
                 // tile. Smaller or wildly different readings mean the window
                 // was caught mid-change (zoom animation, being dragged) — and
@@ -957,7 +966,8 @@ final class TilingService: @unchecked Sendable {
         var learned = false
         for (windowID, requested) in applied where windowID != dragged {
             guard let element = elements[windowID], let actual = accessibilityService.windowFrame(of: element),
-                  actual.width > requested.width + 2 || actual.height > requested.height + 2 else { continue }
+                  actual.width > requested.width + Self.roundingTolerance
+                    || actual.height > requested.height + Self.roundingTolerance else { continue }
             let known = minSizes[windowID] ?? .zero
             let size = CGSize(width: max(known.width, actual.width), height: max(known.height, actual.height))
             if size.width > known.width + 1 || size.height > known.height + 1 {
