@@ -15,6 +15,9 @@ final class FloeCore: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
 
     @Published private(set) var isRunning = false
+    /// Set by Pause in the menu. Config changes must not quietly restart
+    /// everything while paused.
+    private var isPaused = false
     @Published private(set) var hotkeysActive = false
 
     init(configManager: ConfigManager, accessibilityService: AccessibilityService) {
@@ -27,7 +30,8 @@ final class FloeCore: ObservableObject {
             .removeDuplicates()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] config in
-                self?.applyConfig(config)
+                guard let self, !self.isPaused else { return }
+                self.applyConfig(config)
             }
             .store(in: &cancellables)
     }
@@ -38,8 +42,15 @@ final class FloeCore: ObservableObject {
             return
         }
         Log.info("Core: starting")
+        isPaused = false
         applyConfig(configManager.config)
         isRunning = true
+    }
+
+    /// Pauses everything until `start()`.
+    func pause() {
+        isPaused = true
+        stop()
     }
 
     func stop() {
@@ -52,7 +63,7 @@ final class FloeCore: ObservableObject {
     }
 
     func toggle() {
-        if isRunning { stop() } else { start() }
+        if isRunning { pause() } else { start() }
     }
 
     private func applyConfig(_ config: Configuration) {
