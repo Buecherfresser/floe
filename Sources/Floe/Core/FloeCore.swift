@@ -18,6 +18,8 @@ final class FloeCore: ObservableObject {
     /// Set by Pause in the menu. Config changes must not quietly restart
     /// everything while paused.
     private var isPaused = false
+    /// Config changes only apply once `start()` ran (Accessibility granted).
+    private var hasStarted = false
     @Published private(set) var hotkeysActive = false
 
     init(configManager: ConfigManager, accessibilityService: AccessibilityService) {
@@ -30,7 +32,7 @@ final class FloeCore: ObservableObject {
             .removeDuplicates()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] config in
-                guard let self, !self.isPaused else { return }
+                guard let self, self.hasStarted, !self.isPaused else { return }
                 self.applyConfig(config)
             }
             .store(in: &cancellables)
@@ -42,6 +44,7 @@ final class FloeCore: ObservableObject {
             return
         }
         Log.info("Core: starting")
+        hasStarted = true
         isPaused = false
         applyConfig(configManager.config)
         isRunning = true

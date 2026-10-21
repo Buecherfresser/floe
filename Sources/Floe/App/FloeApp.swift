@@ -9,6 +9,11 @@ final class AppState: ObservableObject {
         accessibilityService: accessibilityService
     )
 
+    init() {
+        // Start right at launch, not only once the menu bar menu is opened.
+        DispatchQueue.main.async { [weak self] in self?.startIfReady() }
+    }
+
     var hasLaunchedBefore: Bool {
         UserDefaults.standard.bool(forKey: "hasLaunchedBefore")
     }
