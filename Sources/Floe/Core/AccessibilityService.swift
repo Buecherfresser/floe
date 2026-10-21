@@ -1,6 +1,10 @@
 @preconcurrency import ApplicationServices
 import AppKit
 
+/// Private HIServices call mapping an AX window element to its CGWindowID.
+@_silgen_name("_AXUIElementGetWindow")
+private func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: UnsafeMutablePointer<CGWindowID>) -> AXError
+
 @MainActor
 final class AccessibilityService: ObservableObject {
     @Published private(set) var isTrusted = false
@@ -26,8 +30,13 @@ final class AccessibilityService: ObservableObject {
             Log.debug("AX: NSRunningApplication not found for pid=\(pid)")
             return
         }
-        let activated = nsApp.activate()
-        Log.debug("AX: activate pid=\(pid) name=\(nsApp.localizedName ?? "?") result=\(activated)")
+        // Since macOS 14 activation is cooperative and `activate()` from a
+        // background agent is often ignored; setting AXFrontmost isn't.
+        let axResult = AXUIElementSetAttributeValue(
+            AXUIElementCreateApplication(pid), kAXFrontmostAttribute as CFString, kCFBooleanTrue
+        )
+        let activated = axResult == .success || nsApp.activate()
+        Log.debug("AX: activate pid=\(pid) name=\(nsApp.localizedName ?? "?") ax=\(axResult.rawValue) result=\(activated)")
     }
 
     /// Raises the specific window of a given app whose position matches `targetOrigin`.
@@ -100,28 +109,55 @@ final class AccessibilityService: ObservableObject {
     // MARK: - Window Frame Manipulation
 
     /// Sets the position and size of an AX window element.
-    nonisolated func setWindowFrame(element: AXUIElement, frame: CGRect) {
+    /// Moves/resizes a window, touching only what actually differs: every
+    /// redundant set makes the app redraw, which flickers (retiles happen on
+    /// every focus change).
+    /// Returns the frame the window had before (nil if unreadable).
+    @discardableResult
+    nonisolated func setWindowFrame(element: AXUIElement, frame: CGRect) -> CGRect? {
+        let current = windowFrame(of: element)
+        let tolerance: CGFloat = 1
+        let needsMove = current.map { abs($0.minX - frame.minX) > tolerance || abs($0.minY - frame.minY) > tolerance } ?? true
+        let needsResize = current.map { abs($0.width - frame.width) > tolerance || abs($0.height - frame.height) > tolerance } ?? true
+        guard needsMove || needsResize else { return current }
+
+        if let windowID = windowID(of: element) { WindowTouches.note(windowID) }
         var position = frame.origin
         var size = CGSize(width: frame.width, height: frame.height)
 
-        if let posValue = AXValueCreate(.cgPoint, &position) {
+        if needsMove, let posValue = AXValueCreate(.cgPoint, &position) {
             let posResult = AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, posValue)
             if posResult != .success {
                 Log.debug("AX: setWindowFrame position failed (\(posResult.rawValue))")
             }
         }
 
-        if let sizeValue = AXValueCreate(.cgSize, &size) {
+        if needsResize, let sizeValue = AXValueCreate(.cgSize, &size) {
             let sizeResult = AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, sizeValue)
             if sizeResult != .success {
                 Log.debug("AX: setWindowFrame size failed (\(sizeResult.rawValue))")
             }
-        }
 
-        // Set position again after resize — some apps adjust origin when resized
-        if let posValue = AXValueCreate(.cgPoint, &position) {
-            AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, posValue)
+            // Some apps (Electron) ignore a small shrink from a full-height or
+            // full-width state, but accept the size when coming from below.
+            if let before = current, let after = windowFrame(of: element),
+               abs(after.width - before.width) <= tolerance, abs(after.height - before.height) <= tolerance,
+               abs(after.width - frame.width) > tolerance || abs(after.height - frame.height) > tolerance {
+                var smaller = CGSize(width: frame.width * 0.95, height: frame.height * 0.95)
+                if let smallerValue = AXValueCreate(.cgSize, &smaller) {
+                    AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, smallerValue)
+                    AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, sizeValue)
+                }
+            }
+
+            // Some apps adjust their origin when resized — correct it if so.
+            if let after = windowFrame(of: element),
+               abs(after.minX - frame.minX) > tolerance || abs(after.minY - frame.minY) > tolerance,
+               let posValue = AXValueCreate(.cgPoint, &position) {
+                AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, posValue)
+            }
         }
+        return current
     }
 
     /// Returns AXUIElement windows for a given PID along with their current frames.
@@ -166,6 +202,79 @@ final class AccessibilityService: ObservableObject {
         AXValueGetValue(sizeVal as! AXValue, .cgSize, &size)
 
         return CGRect(origin: position, size: size)
+    }
+
+    nonisolated func windowID(of element: AXUIElement) -> CGWindowID? {
+        var windowID: CGWindowID = 0
+        guard _AXUIElementGetWindow(element, &windowID) == .success, windowID != 0 else { return nil }
+        return windowID
+    }
+
+    nonisolated func isFullScreen(_ element: AXUIElement) -> Bool {
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, "AXFullScreen" as CFString, &ref) == .success else { return false }
+        return (ref as? Bool) ?? false
+    }
+
+    /// Releases a window from macOS's own window tiling (Window › Move &
+    /// Resize › Return to Previous Size). Tiled windows otherwise snap back
+    /// to their tile whenever they're moved or resized from outside.
+    /// The menu item acts on the app's main window, so make it main first.
+    @discardableResult
+    nonisolated func untileWindow(_ window: AXUIElement, pid: pid_t) -> Bool {
+        AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)
+        let app = AXUIElementCreateApplication(pid)
+        var menuBarRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXMenuBarAttribute as CFString, &menuBarRef) == .success,
+              let menuBarRef, CFGetTypeID(menuBarRef) == AXUIElementGetTypeID(),
+              let item = findMenuItem(in: menuBarRef as! AXUIElement, identifier: "_zoomUntile:", depth: 5) else {
+            return false
+        }
+        var enabledRef: CFTypeRef?
+        if AXUIElementCopyAttributeValue(item, kAXEnabledAttribute as CFString, &enabledRef) == .success,
+           (enabledRef as? Bool) == false {
+            return false // not tiled
+        }
+        return AXUIElementPerformAction(item, kAXPressAction as CFString) == .success
+    }
+
+    private nonisolated func findMenuItem(in element: AXUIElement, identifier: String, depth: Int) -> AXUIElement? {
+        var childrenRef: CFTypeRef?
+        guard depth > 0,
+              AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef) == .success,
+              let children = childrenRef as? [AXUIElement] else { return nil }
+        for child in children {
+            var idRef: CFTypeRef?
+            if AXUIElementCopyAttributeValue(child, kAXIdentifierAttribute as CFString, &idRef) == .success,
+               (idRef as? String) == identifier {
+                return child
+            }
+            if let found = findMenuItem(in: child, identifier: identifier, depth: depth - 1) { return found }
+        }
+        return nil
+    }
+
+    /// Whether the window can be resized. Fixed-size windows (System Settings,
+    /// Calculator, …) can't fill a tile, so tiling leaves them floating.
+    nonisolated func isResizable(_ element: AXUIElement) -> Bool {
+        var settable: DarwinBoolean = false
+        if AXUIElementIsAttributeSettable(element, kAXSizeAttribute as CFString, &settable) == .success,
+           !settable.boolValue {
+            return false
+        }
+
+        // Fixed-size windows report a settable size but disable the zoom button.
+        var zoomRef: CFTypeRef?
+        if AXUIElementCopyAttributeValue(element, kAXZoomButtonAttribute as CFString, &zoomRef) == .success,
+           let zoomRef, CFGetTypeID(zoomRef) == AXUIElementGetTypeID() {
+            var enabledRef: CFTypeRef?
+            if AXUIElementCopyAttributeValue(zoomRef as! AXUIElement, kAXEnabledAttribute as CFString, &enabledRef) == .success,
+               let enabled = enabledRef as? Bool, !enabled {
+                return false
+            }
+        }
+
+        return true
     }
 
     /// Checks if an AX window element has the standard window subrole (not a dialog, sheet, etc.).
