@@ -49,8 +49,18 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-echo "==> Code signing (ad-hoc)..."
-codesign --force --sign - --deep "$APP_BUNDLE"
+# A stable identity keeps the Accessibility grant valid across rebuilds;
+# ad-hoc signatures change with every build and invalidate it.
+SIGN_IDENTITY="${SIGN_IDENTITY:-$(security find-identity -v -p codesigning \
+    | sed -n 's/.*"\(Apple Development: .*\)"/\1/p' | head -1)}"
+
+if [[ -n "$SIGN_IDENTITY" ]]; then
+    echo "==> Code signing ($SIGN_IDENTITY)..."
+    codesign --force --sign "$SIGN_IDENTITY" --deep "$APP_BUNDLE"
+else
+    echo "==> Code signing (ad-hoc — Accessibility must be re-granted after each build)..."
+    codesign --force --sign - --deep "$APP_BUNDLE"
+fi
 
 echo ""
 echo "Done! Built ${APP_NAME}.app ${VERSION}"
