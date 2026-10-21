@@ -24,6 +24,19 @@ final class FocusFollowsMouse: @unchecked Sendable {
 
     private static let ignoredWindowOwners: Set<String> = ["Window Server", "Dock"]
 
+    /// Click-through overlays that sit above normal windows without being a
+    /// menu, e.g. the frame and dimming of a macOS screen recording.
+    private static let ignoredOverlayOwners: Set<String> = ignoredWindowOwners.union(["Screenshot"])
+
+    /// Menus and popovers are small. An overlay covering most of a display is
+    /// a click-through layer (screen recording, screen dimming), not a menu.
+    private static func coversMostOfADisplay(_ bounds: CGRect) -> Bool {
+        Monitors.ordered().contains { monitor in
+            let overlap = monitor.bounds.intersection(bounds)
+            return !overlap.isNull && overlap.width * overlap.height > 0.5 * monitor.bounds.width * monitor.bounds.height
+        }
+    }
+
     /// Set after Floe focuses a window itself (hotkeys, app switcher): the
     /// window under the cursor at that moment must not steal focus back —
     /// only entering a different window does.
@@ -235,7 +248,8 @@ final class FocusFollowsMouse: @unchecked Sendable {
             // A menu, popover or panel above normal windows is under the
             // cursor — focusing the window beneath it would close it.
             if layer > Self.minimumWindowLayer, layer < Self.overlayLayerLimit,
-               bounds.contains(point), ownerName.map({ !Self.ignoredWindowOwners.contains($0) }) ?? true {
+               bounds.contains(point), ownerName.map({ !Self.ignoredOverlayOwners.contains($0) }) ?? true,
+               !Self.coversMostOfADisplay(bounds) {
                 Log.debug("FFM/windowLookup: overlay \(ownerName ?? "?") layer=\(layer) under cursor, skipping")
                 return nil
             }
