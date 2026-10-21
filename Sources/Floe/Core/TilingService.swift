@@ -662,11 +662,12 @@ final class TilingService: @unchecked Sendable {
         }
         if WindowTouches.wasTouched(windowID) { return } // moved by Floe (e.g. to another desktop)
         if let applied = appliedFrames[windowID], frame.isApproximately(applied.frame) { return }
+        if let settled = settledFrames[windowID]?.actual, frame.isApproximately(settled) { return }
 
         if CGEventSource.buttonState(.combinedSessionState, button: .left) {
             // The user is dragging the window or one of its edges; act on mouse-up.
             userAdjustedWindowIDs.insert(windowID)
-            if let applied = appliedFrames[windowID], !frame.size.isApproximately(applied.frame.size) {
+            if let tiled = tiledSize(of: windowID), !frame.size.isApproximately(tiled) {
                 // Edge resize: let the neighbours follow while dragging.
                 updateRatios(for: windowID, to: frame, key: key)
                 scheduleLiveApply(key, skipping: [windowID])
@@ -717,6 +718,13 @@ final class TilingService: @unchecked Sendable {
         scheduleRetile()
     }
 
+    /// The size the window actually has in its tile. Apps that round their
+    /// size (Terminal) settle a few points off the tile we asked for, and a
+    /// plain move must not look like a resize.
+    private func tiledSize(of windowID: CGWindowID) -> CGSize? {
+        settledFrames[windowID]?.actual.size ?? appliedFrames[windowID]?.frame.size
+    }
+
     /// Mouse released after the user moved/resized windows: a resize keeps
     /// the new split ratios, a move dropped onto another tiled window swaps
     /// the two, anything else snaps back into the layout.
@@ -740,9 +748,9 @@ final class TilingService: @unchecked Sendable {
             guard let key = screenKeyForWindow[windowID],
                   let element = elements[windowID],
                   let frame = accessibilityService.windowFrame(of: element),
-                  let applied = appliedFrames[windowID] else { continue }
+                  let tiled = tiledSize(of: windowID) else { continue }
 
-            if !frame.size.isApproximately(applied.frame.size) {
+            if !frame.size.isApproximately(tiled) {
                 updateRatios(for: windowID, to: frame, key: key)
                 Log.info("Tiling: wid=\(windowID) resized by user — keeping new split")
             } else if let target = tiledWindow(at: mouse, excluding: windowID),
