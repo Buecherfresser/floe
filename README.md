@@ -2,9 +2,7 @@
 
 Floe is a tiling window manager for macOS 26 that works with System Integrity Protection (SIP) left on. It tiles your windows on every display, focuses the window under the mouse and switches desktops instantly.
 
-<!-- GIF 1: tiling, opening windows, dropping one onto another to swap, ⌃-drag to resize
-![Tiling](docs/media/tiling.gif)
--->
+https://github.com/user-attachments/assets/5d0ffbd8-4222-4b7d-9b62-0dad385cac75
 
 - **Tiling.** Windows share each display and retile as soon as you open, move or resize one. Drop a window onto another to swap them, or hold Control and drag to resize.
 - **Desktops.** Hotkeys switch desktops instantly and send windows to other desktops, on any monitor.
