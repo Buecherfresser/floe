@@ -29,6 +29,10 @@ struct FloeApp: App {
     @StateObject private var appState = AppState()
     @Environment(\.openWindow) private var openWindow
 
+    init() {
+        Diagnostics.runIfRequested()
+    }
+
     var body: some Scene {
         MenuBarExtra {
             MenuBarView()
