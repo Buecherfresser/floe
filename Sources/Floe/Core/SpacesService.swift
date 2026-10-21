@@ -408,21 +408,65 @@ final class SpacesService: @unchecked Sendable {
     /// and focuses it, or launches the app if it isn't running.
     func pullApp(bundleID: String, completion: (@Sendable () -> Void)? = nil) {
         queue.async { [self] in
-            defer { completion?() }
+            let current = spaceUnderCursor()
+            Log.info("Spaces: pull \(bundleID) to space \(current) (cursor \(CGEvent(source: nil)?.location ?? .zero))")
             guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first,
                   let windowID = mostRecentWindowID(of: app) else {
+                // The app opens its new window wherever it remembers its last
+                // one, often another desktop. Wait for it and bring it here.
+                let existing = Set(windowIDs(ofBundle: bundleID))
                 launch(bundleID: bundleID)
+                pullNewWindow(bundleID: bundleID, excluding: existing, to: current, attempt: 0, completion: completion)
                 return
             }
+            pull(windowID: windowID, of: app, to: current)
+            completion?()
+        }
+    }
 
-            let current = spaceUnderCursor()
-            if !CGSSpaceService.spaces(forWindow: windowID).contains(current) {
-                Log.info("Spaces: pulling \(bundleID) window \(windowID) to space \(current)")
-                guard CGSSpaceService.moveWindow(windowID, toSpace: current) else { return }
-            }
-            guard let window = focusWindow(id: windowID, of: app) else { return }
-            moveOntoDisplay(of: current, window: window)
-            moveCursor(into: window)
+    private static let newWindowPollInterval: DispatchTimeInterval = .milliseconds(100)
+    private static let newWindowPollAttempts = 30 // 3 s
+
+    /// Polls (without blocking the queue) for a window the launched app
+    /// opens, then pulls it onto `space`.
+    private func pullNewWindow(
+        bundleID: String, excluding existing: Set<CGWindowID>, to space: CGSSpaceID,
+        attempt: Int, completion: (@Sendable () -> Void)?
+    ) {
+        if let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first,
+           let windowID = mostRecentWindowID(of: app), !existing.contains(windowID) {
+            Log.info("Spaces: \(bundleID) opened window \(windowID)")
+            pull(windowID: windowID, of: app, to: space)
+            completion?()
+            return
+        }
+        guard attempt < Self.newWindowPollAttempts else {
+            Log.info("Spaces: \(bundleID) opened no window to pull")
+            completion?()
+            return
+        }
+        queue.asyncAfter(deadline: .now() + Self.newWindowPollInterval) { [self] in
+            pullNewWindow(bundleID: bundleID, excluding: existing, to: space, attempt: attempt + 1, completion: completion)
+        }
+    }
+
+    private func pull(windowID: CGWindowID, of app: NSRunningApplication, to space: CGSSpaceID) {
+        if !CGSSpaceService.spaces(forWindow: windowID).contains(space) {
+            Log.info("Spaces: pulling \(app.bundleIdentifier ?? "?") window \(windowID) to space \(space)")
+            guard CGSSpaceService.moveWindow(windowID, toSpace: space) else { return }
+        }
+        guard let window = focusWindow(id: windowID, of: app) else { return }
+        moveOntoDisplay(of: space, window: window)
+        moveCursor(into: window)
+    }
+
+    private func windowIDs(ofBundle bundleID: String) -> [CGWindowID] {
+        let pids = Set(NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).map(\.processIdentifier))
+        guard !pids.isEmpty,
+              let infoList = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[CFString: Any]] else { return [] }
+        return infoList.compactMap { info in
+            guard let pid = info[kCGWindowOwnerPID] as? pid_t, pids.contains(pid) else { return nil }
+            return info[kCGWindowNumber] as? CGWindowID
         }
     }
 
