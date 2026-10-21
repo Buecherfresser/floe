@@ -1,104 +1,40 @@
 # Floe
 
-A lightweight tiling window manager for macOS.
+Floe is a tiling window manager for macOS 26 that works with System Integrity Protection (SIP) left on. It tiles your windows on every display, focuses the window under the mouse and switches desktops instantly.
 
-## Features
+<!-- GIF 1: tiling, opening windows, dropping one onto another to swap, ⌃-drag to resize
+![Tiling](docs/media/tiling.gif)
+-->
 
-- **BSP Tiling** — Automatic binary-space-partition window tiling with configurable gaps and split ratios
-- **Focus Follows Mouse** — Automatically focus windows under the cursor with configurable delay
-- **Hotkeys** — Global keyboard shortcuts for space navigation, window movement, and tiling controls
-- **Per-App Rules** — Exclude specific apps from tiling or focus-follows-mouse
+- **Tiling.** Windows share each display and retile as soon as you open, move or resize one. Drop a window onto another to swap them, or hold Control and drag to resize.
+- **Desktops.** Hotkeys switch desktops instantly and send windows to other desktops, on any monitor.
+- **App switcher.** fn+key jumps to an app, fn+shift+key pulls its window onto the desktop you're on.
+- **Stable desktop numbers.** When you plug a monitor in or out, every window goes back to its desktop number.
 
-## Requirements
+<!-- GIF 2: switching desktops and sending a window to another desktop
+![Desktops](docs/media/desktops.gif)
+-->
 
-- macOS 26 (Tahoe) or later
-- Swift 6.2+
-- Accessibility access (prompted on first launch)
+<!-- GIF 3: fn app switcher, jumping to an app and pulling its window over
+![App switcher](docs/media/app-switcher.gif)
+-->
 
-## Build & Run
+## Install
 
-Development:
-
-```bash
-swift build
-swift run Floe
-```
-
-Release (produces `dist/Floe.app`):
+You need macOS 26 and Xcode 26.
 
 ```bash
-./scripts/build-release.sh 0.1.0
+git clone https://github.com/Buecherfresser/floe.git && cd floe
+./scripts/build-release.sh
+cp -R dist/Floe.app /Applications/ && open /Applications/Floe.app
 ```
 
-Install:
+Floe asks for Accessibility access on first launch.
 
-```bash
-cp -R dist/Floe.app /Applications/
-open /Applications/Floe.app
-```
+## Configure
 
-## Configuration
-
-Floe reads its configuration from `~/.config/floe/config.yaml`. A default config is created on first launch. The settings UI is available from the menu bar icon.
-
-### Example config
-
-```yaml
-focusFollowsMouse:
-  enabled: true
-  delay: 10
-  ignoreApps: []
-
-hotkeys:
-  enabled: true
-  bindings:
-    - hotkey:
-        modifiers: [cmd]
-        key: "1"
-      action:
-        focusSpace: 1
-    - hotkey:
-        modifiers: [ctrl]
-        key: "1"
-      action:
-        moveWindowToSpaceAndReturn: 1
-
-tiling:
-  enabled: true
-  gaps:
-    inner: 8
-    outer: 8
-  splitRatio: 0.5
-  autoBalance: true
-  rules:
-    - app: MyWallpaper
-      tiled: false
-
-debug: false
-```
-
-### Hotkey Actions
-
-| Action | Description |
-|---|---|
-| `focusSpace: N` | Switch to space N |
-| `focusSpaceNext` | Switch to next space |
-| `focusSpacePrev` | Switch to previous space |
-| `moveWindowToSpace: N` | Move focused window to space N |
-| `moveWindowToSpaceAndReturn: N` | Move focused window to space N, then return |
-| `moveWindowToSpaceNext` | Move focused window to next space |
-| `moveWindowToSpacePrev` | Move focused window to previous space |
-| `toggleTiling` | Toggle window tiling on/off |
-| `balanceWindows` | Re-balance all tiled windows equally |
-| `increaseSplitRatio` | Increase main area split ratio |
-| `decreaseSplitRatio` | Decrease main area split ratio |
-
-### Modifiers
-
-`cmd`, `alt`, `ctrl`, `shift`
+Open Settings from the Floe icon in the menu bar, which covers everything except adding hotkeys. Floe saves your settings to `~/.config/floe/config.yaml`, where you add hotkeys and can change anything else too. [docs/configuration.md](docs/configuration.md) walks through both.
 
 ## License
 
-MIT License — see [LICENSE](LICENSE) for details.
-
-Copyright (c) 2026 Jonas Drechsel — [jonasdrechsel.com](https://jonasdrechsel.com)
+MIT License, see [LICENSE](LICENSE). Copyright (c) 2026 Jonas Drechsel ([jonasdrechsel.com](https://jonasdrechsel.com))
