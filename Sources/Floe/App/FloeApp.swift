@@ -41,6 +41,8 @@ struct FloeApp: App {
                 .task {
                     if !appState.hasLaunchedBefore {
                         openWindow(id: "onboarding")
+                        // A window manager should be there after every restart.
+                        LoginItem.setEnabled(true)
                         appState.markLaunched()
                     }
                     appState.startIfReady()
