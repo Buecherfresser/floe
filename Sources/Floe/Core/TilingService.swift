@@ -495,7 +495,7 @@ final class TilingService: @unchecked Sendable {
                 var learnedLarger = false
                 if refused {
                     let known = minSizes[windowID] ?? .zero
-                    let learned = CGSize(width: max(known.width, actual.width), height: max(known.height, actual.height))
+                    let learned = Self.learnedMinimum(known: known, requested: frame.size, actual: actual.size)
                     learnedLarger = learned.width > known.width + 1 || learned.height > known.height + 1
                     minSizes[windowID] = learned
                     if learnedLarger {
@@ -959,6 +959,15 @@ final class TilingService: @unchecked Sendable {
         publishTiledFrames()
     }
 
+    /// Only the dimension a window refused tells us its minimum — the other
+    /// one is just its current size.
+    private static func learnedMinimum(known: CGSize, requested: CGSize, actual: CGSize) -> CGSize {
+        CGSize(
+            width: actual.width > requested.width + roundingTolerance ? max(known.width, actual.width) : known.width,
+            height: actual.height > requested.height + roundingTolerance ? max(known.height, actual.height) : known.height
+        )
+    }
+
     /// Records the minimum size of windows that stayed larger than the tile
     /// they were just given. Returns whether anything new was learned.
     private func learnSqueezedMinimums(_ applied: [(CGWindowID, CGRect)], except dragged: CGWindowID? = nil) -> Bool {
@@ -969,7 +978,7 @@ final class TilingService: @unchecked Sendable {
                   actual.width > requested.width + Self.roundingTolerance
                     || actual.height > requested.height + Self.roundingTolerance else { continue }
             let known = minSizes[windowID] ?? .zero
-            let size = CGSize(width: max(known.width, actual.width), height: max(known.height, actual.height))
+            let size = Self.learnedMinimum(known: known, requested: requested.size, actual: actual.size)
             if size.width > known.width + 1 || size.height > known.height + 1 {
                 minSizes[windowID] = size
                 learned = true
