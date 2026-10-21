@@ -115,8 +115,6 @@ final class TilingService: @unchecked Sendable {
         var movesRightEdge: Bool
         var movesBottomEdge: Bool
         var mouse: CGPoint
-        /// Ratios of the last step where every neighbour accepted its size.
-        var lastGoodRatios: [String: Double]?
         /// Set for a window that isn't tiled: it's resized directly.
         var floatingPID: pid_t? = nil
     }
@@ -690,7 +688,10 @@ final class TilingService: @unchecked Sendable {
         retileQueue.asyncAfter(deadline: .now() + Self.liveApplyInterval) { [weak self] in
             guard let self else { return }
             self.liveApplyPending = false
-            self.applyLayout(key, skipping: skipped)
+            let applied = self.applyLayout(key, skipping: skipped)
+            if self.learnSqueezedMinimums(applied) {
+                self.applyLayout(key, skipping: skipped)
+            }
             self.publishTiledFrames()
         }
     }
@@ -777,8 +778,7 @@ final class TilingService: @unchecked Sendable {
                 baseRatios: [:],
                 movesRightEdge: location.x >= frame.midX,
                 movesBottomEdge: location.y >= frame.midY,
-                mouse: location,
-                lastGoodRatios: nil
+                mouse: location
             )
             lock.withLock { resizeSession = session }
             retileQueue.async { [weak self] in
@@ -799,7 +799,6 @@ final class TilingService: @unchecked Sendable {
                         return
                     }
                     current.baseRatios = base
-                    current.lastGoodRatios = base
                     if current.movesRightEdge && !edges.right && edges.left { current.movesRightEdge = false }
                     if !current.movesRightEdge && !edges.left && edges.right { current.movesRightEdge = true }
                     if current.movesBottomEdge && !edges.bottom && edges.top { current.movesBottomEdge = false }
@@ -865,7 +864,7 @@ final class TilingService: @unchecked Sendable {
         let session = ResizeSession(
             windowID: windowID, screenKey: "", startMouse: location, startFrame: frame, baseRatios: [:],
             movesRightEdge: location.x >= frame.midX, movesBottomEdge: location.y >= frame.midY,
-            mouse: location, lastGoodRatios: nil, floatingPID: pid
+            mouse: location, floatingPID: pid
         )
         lock.withLock { resizeSession = session }
         Log.info("Tiling: ⌃-drag resize of floating wid=\(windowID) started")
@@ -942,21 +941,32 @@ final class TilingService: @unchecked Sendable {
         updateRatios(for: session.windowID, to: frame, key: session.screenKey, base: session.baseRatios)
         let applied = applyLayout(session.screenKey)
 
-        // Stop where a neighbour hits its minimum size instead of squeezing it
-        // (it would refuse the size and end up floating).
-        let elements = lock.withLock { windowElements }
-        let squeezed = applied.contains { windowID, requested in
-            guard let element = elements[windowID], let actual = accessibilityService.windowFrame(of: element) else { return false }
-            return actual.width > requested.width + 2 || actual.height > requested.height + 2
-        }
-        if squeezed, let good = session.lastGoodRatios {
-            setUserRatios(good, onScreen: session.screenKey)
+        // Stop where a neighbour hits its minimum size: learn that size, and
+        // the layout holds the edge there on every further drag step instead
+        // of jumping back and forth.
+        if learnSqueezedMinimums(applied, except: session.windowID) {
             applyLayout(session.screenKey)
-        } else if explicit == nil {
-            let current = userRatios(onScreen: session.screenKey)
-            lock.withLock { resizeSession?.lastGoodRatios = current }
         }
         publishTiledFrames()
+    }
+
+    /// Records the minimum size of windows that stayed larger than the tile
+    /// they were just given. Returns whether anything new was learned.
+    private func learnSqueezedMinimums(_ applied: [(CGWindowID, CGRect)], except dragged: CGWindowID? = nil) -> Bool {
+        let elements = lock.withLock { windowElements }
+        var learned = false
+        for (windowID, requested) in applied where windowID != dragged {
+            guard let element = elements[windowID], let actual = accessibilityService.windowFrame(of: element),
+                  actual.width > requested.width + 2 || actual.height > requested.height + 2 else { continue }
+            let known = minSizes[windowID] ?? .zero
+            let size = CGSize(width: max(known.width, actual.width), height: max(known.height, actual.height))
+            if size.width > known.width + 1 || size.height > known.height + 1 {
+                minSizes[windowID] = size
+                learned = true
+                Log.info("Tiling: wid=\(windowID) can't get smaller than \(size) — holding the edge there")
+            }
+        }
+        return learned
     }
 
     /// The tiled window under the cursor, unless a floating window covers it.
