@@ -17,6 +17,21 @@ mkdir -p "$APP_BUNDLE/Contents/Resources"
 
 cp "$BUILD_DIR/$APP_NAME" "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 
+echo "==> Creating app icon..."
+ICONSET="$(mktemp -d)/AppIcon.iconset"
+mkdir -p "$ICONSET"
+for size in 128 256 512; do
+    sips -z $size $size Assets/AppIcon.png --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
+    sips -z $((size * 2)) $((size * 2)) Assets/AppIcon.png --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
+done
+# 32 and 64 px are tidied by hand so the face stays crisp. iconutil stores
+# 16 and 32 px @1x in a legacy format that garbles the transparent edge,
+# so macOS scales those down from the @2x images instead.
+cp Assets/AppIcon-32.png "$ICONSET/icon_16x16@2x.png"
+cp Assets/AppIcon-64.png "$ICONSET/icon_32x32@2x.png"
+iconutil -c icns "$ICONSET" -o "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
+rm -rf "$(dirname "$ICONSET")"
+
 cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
