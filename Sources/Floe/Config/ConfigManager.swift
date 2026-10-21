@@ -54,12 +54,20 @@ final class ConfigManager: ObservableObject {
             return .default
         }
 
+        return decodeFromDisk() ?? .default
+    }
+
+    /// Decodes the config file, logging why it failed. `nil` when the file is
+    /// missing or unparseable.
+    private func decodeFromDisk() -> Configuration? {
         guard let data = try? Data(contentsOf: configURL),
-              let yaml = String(data: data, encoding: .utf8),
-              let loaded = try? YAMLDecoder().decode(Configuration.self, from: yaml) else {
-            return .default
+              let yaml = String(data: data, encoding: .utf8) else { return nil }
+        do {
+            return try YAMLDecoder().decode(Configuration.self, from: yaml)
+        } catch {
+            Log.error("ConfigManager: could not parse \(configURL.path): \(error)")
+            return nil
         }
-        return loaded
     }
 
     func save(_ configuration: Configuration) {
@@ -83,6 +91,15 @@ final class ConfigManager: ObservableObject {
         guard let yamlString = try? YAMLEncoder().encode(toSave) else { return }
         let fm = FileManager.default
         try? fm.createDirectory(at: Self.configDirectory, withIntermediateDirectories: true)
+
+        // Keep a copy of a hand-edited file we couldn't parse instead of
+        // silently replacing it.
+        if fm.fileExists(atPath: configURL.path), decodeFromDisk() == nil {
+            let backup = configURL.appendingPathExtension("broken")
+            try? fm.removeItem(at: backup)
+            try? fm.copyItem(at: configURL, to: backup)
+            Log.error("ConfigManager: backed up unparseable config to \(backup.path)")
+        }
         try? yamlString.write(to: configURL, atomically: true, encoding: .utf8)
         self.config = toSave
     }
@@ -113,29 +130,38 @@ final class ConfigManager: ObservableObject {
         fileDescriptor = open(configURL.path, O_EVTONLY)
         guard fileDescriptor >= 0 else { return }
 
+        // Atomic saves (ours and most editors') replace the file, so the
+        // watched inode goes away — re-arm on delete/rename.
         let source = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: fileDescriptor,
-            eventMask: .write,
+            eventMask: [.write, .extend, .delete, .rename],
             queue: .global(qos: .utility)
         )
 
-        source.setEventHandler { [weak self] in
-            guard let self else { return }
+        // Runs on a background queue: must not be inferred as main-actor
+        // isolated, or Swift's runtime isolation check traps.
+        source.setEventHandler { @Sendable [weak self, weak source] in
+            let replaced = !(source?.data.intersection([.delete, .rename]).isEmpty ?? true)
             DispatchQueue.main.async {
+                guard let self else { return }
+                if replaced {
+                    self.stopWatching()
+                    self.startWatching()
+                }
                 guard !self.isSaving else { return }
-                let reloaded = self.loadOrCreate()
+                // Keep the current config if the file is mid-write or invalid.
+                guard let reloaded = self.decodeFromDisk() else { return }
                 if reloaded != self.config {
                     self.config = reloaded
                 }
             }
         }
 
-        source.setCancelHandler { [weak self] in
-            guard let self else { return }
-            if self.fileDescriptor >= 0 {
-                close(self.fileDescriptor)
-                self.fileDescriptor = -1
-            }
+        // Close this source's own descriptor — by the time the handler runs,
+        // `fileDescriptor` may already belong to a re-armed watcher.
+        let fd = fileDescriptor
+        source.setCancelHandler { @Sendable in
+            close(fd)
         }
 
         source.resume()
