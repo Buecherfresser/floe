@@ -7,6 +7,11 @@ struct MenuBarView: View {
     var body: some View {
         VStack(spacing: 0) {
             statusRow
+            ForEach(SystemCheck.issues()) { issue in
+                SettingsLink {
+                    Label(issue.title, systemImage: "exclamationmark.triangle.fill")
+                }
+            }
             Divider()
             toggleButton
             Divider()
@@ -44,8 +49,10 @@ struct MenuBarView: View {
         if !accessibilityService.isTrusted { return "Accessibility access required" }
         if !core.isRunning { return "Paused" }
         var features: [String] = []
-        if core.configManager.config.focusFollowsMouse.enabled { features.append("FFM") }
-        if core.hotkeysActive { features.append("Hotkeys") }
+        let config = core.configManager.config
+        if config.tiling.enabled { features.append("tiling") }
+        if core.hotkeysActive { features.append("hotkeys") }
+        if config.focusFollowsMouse.enabled { features.append("focus follows mouse") }
         return features.isEmpty ? "Active" : "Active: \(features.joined(separator: ", "))"
     }
 
