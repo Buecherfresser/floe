@@ -148,10 +148,19 @@ final class SpacesService: @unchecked Sendable {
 
         moveCursor(toDisplay: display.identifier)
         FocusFollowsMouse.suppress(for: .milliseconds(700))
+
+        // Decide which app is in front on the target desktop before macOS
+        // does — otherwise it activates one whose window is elsewhere and the
+        // Dock follows that window to another desktop.
+        let frontApp = frontmostAppPID(onSpace: target)
+        if let pid = frontApp ?? FrontProcess.finderPID {
+            FrontProcess.prepare(space: target, frontApp: pid)
+        }
+
         postDockSwipes(count: abs(delta), direction: delta > 0 ? 1 : -1)
 
         if waitForCurrentSpace(target, on: display.identifier) {
-            if isOtherDisplay { takeKeyboardFocus(space: target) }
+            if frontApp != nil || isOtherDisplay { takeKeyboardFocus(space: target) }
             return true
         }
 
@@ -200,6 +209,26 @@ final class SpacesService: @unchecked Sendable {
         Log.info("Spaces: switching to desktop \(index) via Ctrl+\(index % 10)")
         postSyntheticKey(keyCode: keyCode, flags: .maskControl)
         return true
+    }
+
+    /// The app owning the frontmost normal window on `space`, on any desktop.
+    private func frontmostAppPID(onSpace space: CGSSpaceID) -> pid_t? {
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        guard let infoList = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[CFString: Any]] else {
+            return nil
+        }
+        for info in infoList {
+            guard (info[kCGWindowLayer] as? Int) == 0,
+                  (info[kCGWindowAlpha] as? Double ?? 1) > 0,
+                  let windowID = info[kCGWindowNumber] as? CGWindowID,
+                  let pid = info[kCGWindowOwnerPID] as? pid_t, pid != ownPID,
+                  let bounds = info[kCGWindowBounds] as? [String: CGFloat],
+                  (bounds["Width"] ?? 0) >= 50, (bounds["Height"] ?? 0) >= 50,
+                  NSRunningApplication(processIdentifier: pid)?.activationPolicy == .regular,
+                  CGSSpaceService.spaces(forWindow: windowID).contains(space) else { continue }
+            return pid
+        }
+        return nil
     }
 
     /// Switching a display's space doesn't move keyboard focus to that display.
@@ -332,13 +361,20 @@ final class SpacesService: @unchecked Sendable {
             moveOntoDisplay(of: target, window: window)
         }
         guard CGSSpaceService.moveWindow(window.id, toSpace: target) else { return }
+        // Arriving on the target desktop later should activate this app.
+        FrontProcess.setFrontApp(window.pid, ofSpace: target)
 
         if follow {
             focus(space: target)
             focusWindow(window)
         } else {
             // The window was focused, so its display's space is the active one.
-            focusFrontmostWindow(onSpace: CGSSpaceService.currentSpaceID(), excluding: window.id)
+            let current = CGSSpaceService.currentSpaceID()
+            if !focusFrontmostWindow(onSpace: current, excluding: window.id), let finder = FrontProcess.finderPID {
+                // Nothing left here: hand focus to the desktop itself, without
+                // Finder pulling one of its windows (and us) elsewhere.
+                FrontProcess.prepare(space: current, frontApp: finder)
+            }
         }
     }
 
