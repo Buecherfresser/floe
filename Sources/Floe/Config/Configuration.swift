@@ -8,8 +8,9 @@ struct FocusFollowsMouseConfig: Codable, Equatable, Sendable {
     var delay: Int
     var ignoreApps: [String]
 
+    // Off by default: it takes getting used to.
     static let `default` = FocusFollowsMouseConfig(
-        enabled: true,
+        enabled: false,
         delay: 10,
         ignoreApps: []
     )
@@ -201,7 +202,15 @@ struct HotkeysConfig: Codable, Equatable, Sendable {
     var enabled: Bool
     var bindings: [HotkeyBinding]
 
-    static let `default` = HotkeysConfig(enabled: false, bindings: [])
+    /// Ctrl+N switches to desktop N (the shortcut macOS users already know),
+    /// Ctrl+Shift+N sends the focused window there.
+    static let `default` = HotkeysConfig(
+        enabled: true,
+        bindings: (1...9).flatMap { n in [
+            HotkeyBinding(hotkey: Hotkey(modifiers: [.ctrl], key: "\(n)"), action: .focusSpace(n)),
+            HotkeyBinding(hotkey: Hotkey(modifiers: [.ctrl, .shift], key: "\(n)"), action: .moveWindowToSpaceAndReturn(n)),
+        ] }
+    )
 }
 
 // MARK: - Tiling
@@ -226,7 +235,7 @@ struct TilingConfig: Codable, Equatable, Sendable {
     var rules: [TilingRule]
 
     static let `default` = TilingConfig(
-        enabled: false,
+        enabled: true,
         gaps: .default,
         splitRatio: 0.5,
         autoBalance: true,
