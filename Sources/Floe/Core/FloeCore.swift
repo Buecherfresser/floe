@@ -9,7 +9,8 @@ final class FloeCore: ObservableObject {
     private var focusFollowsMouse: FocusFollowsMouse?
     private var hotkeyService: HotkeyService?
     private var tilingService: TilingService?
-    private let spacesService = SpacesService()
+    private var desktopLayoutService: DesktopLayoutService?
+    private let spacesService: SpacesService
     private lazy var actionDispatcher = ActionDispatcher(spacesService: spacesService)
     private var cancellables = Set<AnyCancellable>()
 
@@ -19,6 +20,8 @@ final class FloeCore: ObservableObject {
     init(configManager: ConfigManager, accessibilityService: AccessibilityService) {
         self.configManager = configManager
         self.accessibilityService = accessibilityService
+        self.spacesService = SpacesService(accessibilityService: accessibilityService)
+        actionDispatcher.configManager = configManager
 
         configManager.$config
             .removeDuplicates()
@@ -44,6 +47,7 @@ final class FloeCore: ObservableObject {
         focusFollowsMouse = nil
         stopHotkeys()
         stopTiling()
+        stopDesktopLayouts()
         isRunning = false
     }
 
@@ -58,6 +62,35 @@ final class FloeCore: ObservableObject {
         applyFocusFollowsMouse(config)
         applyHotkeys(config)
         applyTiling(config)
+        applyDesktopLayouts(config)
+    }
+
+    // MARK: - Desktop Layouts
+
+    /// Re-applies the desktop layout for the connected monitors.
+    func applyDesktopLayoutNow() {
+        desktopLayoutService?.applyNow()
+    }
+
+    private func applyDesktopLayouts(_ config: Configuration) {
+        if config.desktopLayouts.enabled && accessibilityService.isTrusted {
+            if let service = desktopLayoutService {
+                service.update(config: config.desktopLayouts)
+            } else {
+                let service = DesktopLayoutService(config: config.desktopLayouts) { [weak self] in
+                    DispatchQueue.main.async { self?.tilingService?.retile() }
+                }
+                desktopLayoutService = service
+                service.start()
+            }
+        } else {
+            stopDesktopLayouts()
+        }
+    }
+
+    private func stopDesktopLayouts() {
+        desktopLayoutService?.stop()
+        desktopLayoutService = nil
     }
 
     // MARK: - Focus Follows Mouse
@@ -87,15 +120,17 @@ final class FloeCore: ObservableObject {
     // MARK: - Hotkeys
 
     private func applyHotkeys(_ config: Configuration) {
-        if config.hotkeys.enabled && accessibilityService.isTrusted {
+        // The app switcher's fn shortcuts run through the hotkey service too.
+        let bindings = (config.hotkeys.enabled ? config.hotkeys.bindings : []) + config.appSwitcher.bindings
+        if !bindings.isEmpty && accessibilityService.isTrusted {
             if let hks = hotkeyService {
-                hks.updateBindings(config.hotkeys.bindings)
+                hks.updateBindings(bindings)
             } else {
                 let dispatcher = actionDispatcher
                 let hks = HotkeyService { action in
                     dispatcher.dispatch(action)
                 }
-                hks.updateBindings(config.hotkeys.bindings)
+                hks.updateBindings(bindings)
                 hks.start()
                 hotkeyService = hks
             }
@@ -125,7 +160,6 @@ final class FloeCore: ObservableObject {
                 )
                 tilingService = ts
                 actionDispatcher.tilingService = ts
-                actionDispatcher.configManager = configManager
                 ts.start()
             }
             isRunning = true

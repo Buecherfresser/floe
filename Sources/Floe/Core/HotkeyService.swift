@@ -13,7 +13,15 @@ final class HotkeyService: @unchecked Sendable {
     private var tapThread: Thread?
     private var tapRunLoop: CFRunLoop?
 
+    /// Arrows, F1–F20, Home/End/Page Up/Page Down, Help, Forward Delete.
+    private static let implicitFnKeyCodes: Set<CGKeyCode> = [
+        123, 124, 125, 126,
+        122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111, 105, 107, 113, 106, 64, 79, 80, 90,
+        115, 119, 116, 121, 114, 117,
+    ]
+
     private let lock = NSLock()
+    private let dispatchQueue = DispatchQueue(label: "com.jonasdrechsel.floe.hotkey-actions", qos: .userInteractive)
     private(set) var isRunning = false
 
     /// Key: (keyCode, modifierFlags) -> Action. Updated atomically via lock.
@@ -135,18 +143,31 @@ final class HotkeyService: @unchecked Sendable {
 
         let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
         let rawFlags = event.flags
-        let modFlags = rawFlags.intersection(Modifier.relevantMask)
+        var modFlags = rawFlags.intersection(Modifier.relevantMask)
+        // Arrow, F- and navigation keys always report the fn flag on Mac
+        // keyboards; only treat fn as a modifier for other keys.
+        if Self.implicitFnKeyCodes.contains(keyCode) {
+            modFlags.remove(.maskSecondaryFn)
+        }
 
         let key = BindingKey(keyCode: keyCode, flags: modFlags)
         let action: Action? = lock.withLock { bindingMap[key] }
 
+        // macOS reserves some fn+letter combos (fn+C Control Center, …); log
+        // what actually arrives so missing shortcuts can be diagnosed.
+        if type == .keyDown, modFlags.contains(.maskSecondaryFn) {
+            Log.info("Hotkeys: fn keyDown keyCode=\(keyCode) key=\(KeyCode.name(for: keyCode) ?? "?") flags=0x\(String(modFlags.rawValue, radix: 16)) matched=\(action != nil)")
+        }
+
         guard let action else { return event }
 
-        // Only dispatch on keyDown to avoid double-firing
-        if type == .keyDown {
+        // Only dispatch on the initial keyDown — not keyUp or autorepeat —
+        // and in order, so quick successive hotkeys don't race.
+        let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+        if type == .keyDown && !isRepeat {
             Log.debug("Hotkeys: matched keyCode=\(keyCode) flags=\(modFlags.rawValue) -> \(action)")
             let handler = self.handler
-            DispatchQueue.global(qos: .userInteractive).async {
+            dispatchQueue.async {
                 handler(action)
             }
         }

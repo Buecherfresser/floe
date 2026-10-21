@@ -22,6 +22,8 @@ enum Modifier: String, Codable, Hashable, Sendable, CaseIterable {
     case shift
     case ctrl
     case cmd
+    /// The fn / 🌐 key.
+    case fn
 
     var cgFlag: CGEventFlags {
         switch self {
@@ -29,6 +31,7 @@ enum Modifier: String, Codable, Hashable, Sendable, CaseIterable {
         case .shift: return .maskShift
         case .ctrl:  return .maskControl
         case .cmd:   return .maskCommand
+        case .fn:    return .maskSecondaryFn
         }
     }
 
@@ -40,7 +43,7 @@ enum Modifier: String, Codable, Hashable, Sendable, CaseIterable {
 
     /// Relevant modifier mask for matching (ignoring caps lock, num lock, etc.)
     static let relevantMask = CGEventFlags([
-        .maskAlternate, .maskShift, .maskControl, .maskCommand,
+        .maskAlternate, .maskShift, .maskControl, .maskCommand, .maskSecondaryFn,
     ])
 }
 
@@ -65,6 +68,12 @@ enum Action: Equatable, Sendable {
     case balanceWindows
     case increaseSplitRatio
     case decreaseSplitRatio
+    /// Bring the app's most recent window to front (switching to its space),
+    /// or launch the app. Value: bundle identifier.
+    case focusApp(String)
+    /// Move the app's most recent window onto the current space and focus it,
+    /// or launch the app. Value: bundle identifier.
+    case pullApp(String)
 }
 
 extension Action: Codable {
@@ -76,6 +85,7 @@ extension Action: Codable {
         case focusSpaceNext, focusSpacePrev
         case toggleTiling, balanceWindows
         case increaseSplitRatio, decreaseSplitRatio
+        case focusApp, pullApp
     }
 
     init(from decoder: Decoder) throws {
@@ -89,6 +99,12 @@ extension Action: Codable {
             }
             if let v = try keyed.decodeIfPresent(Int.self, forKey: .moveWindowToSpaceAndReturn) {
                 self = .moveWindowToSpaceAndReturn(v); return
+            }
+            if let v = try keyed.decodeIfPresent(String.self, forKey: .focusApp) {
+                self = .focusApp(v); return
+            }
+            if let v = try keyed.decodeIfPresent(String.self, forKey: .pullApp) {
+                self = .pullApp(v); return
             }
             if keyed.contains(.moveWindowToSpaceNext) { self = .moveWindowToSpaceNext; return }
             if keyed.contains(.moveWindowToSpacePrev) { self = .moveWindowToSpacePrev; return }
@@ -166,6 +182,12 @@ extension Action: Codable {
         case .decreaseSplitRatio:
             var c = encoder.singleValueContainer()
             try c.encode("decreaseSplitRatio")
+        case .focusApp(let bundleID):
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(bundleID, forKey: .focusApp)
+        case .pullApp(let bundleID):
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(bundleID, forKey: .pullApp)
         }
     }
 }
@@ -212,25 +234,112 @@ struct TilingConfig: Codable, Equatable, Sendable {
     )
 }
 
+// MARK: - App Switcher
+
+/// One fn-key app shortcut: fn+key focuses the app, fn+shift+key pulls it
+/// onto the current space.
+struct AppShortcut: Codable, Equatable, Sendable {
+    var key: String
+    var bundleID: String
+    var name: String
+}
+
+struct AppSwitcherConfig: Codable, Equatable, Sendable {
+    var enabled: Bool
+    var apps: [AppShortcut]
+
+    /// The hotkey bindings these shortcuts expand to.
+    var bindings: [HotkeyBinding] {
+        guard enabled else { return [] }
+        return apps.flatMap { app in [
+            HotkeyBinding(hotkey: Hotkey(modifiers: [.fn], key: app.key), action: .focusApp(app.bundleID)),
+            HotkeyBinding(hotkey: Hotkey(modifiers: [.fn, .shift], key: app.key), action: .pullApp(app.bundleID)),
+        ] }
+    }
+
+    static let `default` = AppSwitcherConfig(
+        enabled: false,
+        apps: [
+            AppShortcut(key: "s", bundleID: "com.spotify.client", name: "Spotify"),
+            AppShortcut(key: "b", bundleID: "com.apple.Safari", name: "Safari"),
+            AppShortcut(key: "g", bundleID: "com.google.Chrome", name: "Google Chrome"),
+            AppShortcut(key: "c", bundleID: "com.anthropic.claudefordesktop", name: "Claude"),
+            AppShortcut(key: "t", bundleID: "com.apple.Terminal", name: "Terminal"),
+            AppShortcut(key: "f", bundleID: "com.apple.finder", name: "Finder"),
+            AppShortcut(key: "d", bundleID: "com.hnc.Discord", name: "Discord"),
+            AppShortcut(key: "o", bundleID: "com.microsoft.Outlook", name: "Microsoft Outlook"),
+            AppShortcut(key: "m", bundleID: "com.microsoft.teams2", name: "Microsoft Teams"),
+            AppShortcut(key: "e", bundleID: "com.todesktop.230313mzl4w4u92", name: "Cursor"),
+            AppShortcut(key: "n", bundleID: "md.obsidian", name: "Obsidian"),
+            AppShortcut(key: "p", bundleID: "com.postmanlabs.mac", name: "Postman"),
+            AppShortcut(key: "l", bundleID: "com.tinyspeck.slackmacgap", name: "Slack"),
+        ]
+    )
+}
+
+// MARK: - Desktop Layouts
+
+/// How many desktops each monitor gets for a given number of connected monitors.
+struct DesktopLayout: Codable, Equatable, Sendable {
+    /// Number of connected monitors this layout applies to.
+    var monitors: Int
+    /// Desktop count per monitor, in monitor order (main display first).
+    var desktops: [Int]
+
+    var totalDesktops: Int { desktops.reduce(0, +) }
+
+    /// 1-based desktop numbers on the given 0-based monitor.
+    func desktopRange(forMonitor index: Int) -> ClosedRange<Int>? {
+        guard desktops.indices.contains(index), desktops[index] > 0 else { return nil }
+        let start = desktops.prefix(index).reduce(0, +) + 1
+        return start...(start + desktops[index] - 1)
+    }
+}
+
+struct DesktopLayoutsConfig: Codable, Equatable, Sendable {
+    /// When on, Floe creates/removes desktops so each monitor matches the
+    /// layout for the current monitor count, and moves windows back to their
+    /// desktops when monitors are reconnected.
+    var enabled: Bool
+    var layouts: [DesktopLayout]
+
+    func layout(forMonitorCount count: Int) -> DesktopLayout? {
+        layouts.first { $0.monitors == count && $0.desktops.count == count }
+    }
+
+    static let `default` = DesktopLayoutsConfig(
+        enabled: false,
+        layouts: [
+            DesktopLayout(monitors: 1, desktops: [9]),
+            DesktopLayout(monitors: 2, desktops: [9, 9]),
+            DesktopLayout(monitors: 3, desktops: [9, 6, 6]),
+        ]
+    )
+}
+
 // MARK: - Top-Level Configuration
 
 struct Configuration: Equatable, Sendable {
     var focusFollowsMouse: FocusFollowsMouseConfig
     var hotkeys: HotkeysConfig
     var tiling: TilingConfig
+    var desktopLayouts: DesktopLayoutsConfig
+    var appSwitcher: AppSwitcherConfig
     var debug: Bool
 
     static let `default` = Configuration(
         focusFollowsMouse: .default,
         hotkeys: .default,
         tiling: .default,
+        desktopLayouts: .default,
+        appSwitcher: .default,
         debug: false
     )
 }
 
 extension Configuration: Codable {
     private enum CodingKeys: String, CodingKey {
-        case focusFollowsMouse, hotkeys, tiling, debug
+        case focusFollowsMouse, hotkeys, tiling, desktopLayouts, appSwitcher, debug
     }
 
     init(from decoder: Decoder) throws {
@@ -238,6 +347,8 @@ extension Configuration: Codable {
         focusFollowsMouse = try c.decodeIfPresent(FocusFollowsMouseConfig.self, forKey: .focusFollowsMouse) ?? .default
         hotkeys = try c.decodeIfPresent(HotkeysConfig.self, forKey: .hotkeys) ?? .default
         tiling = try c.decodeIfPresent(TilingConfig.self, forKey: .tiling) ?? .default
+        desktopLayouts = try c.decodeIfPresent(DesktopLayoutsConfig.self, forKey: .desktopLayouts) ?? .default
+        appSwitcher = try c.decodeIfPresent(AppSwitcherConfig.self, forKey: .appSwitcher) ?? .default
         debug = try c.decodeIfPresent(Bool.self, forKey: .debug) ?? false
     }
 }
