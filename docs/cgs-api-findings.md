@@ -67,30 +67,79 @@ user is automatically switched to the target space instead of staying in place.
 
 | Operation | Method | SIP required |
 |-----------|--------|--------------|
-| **Space switching** | Keyboard simulation (Ctrl+N / Ctrl+Arrow) | No |
-| **Window movement** (default) | Mouse-drag simulation | No |
-| **Window movement** (CGS mode) | `SLSMoveWindowsToManagedSpace` + compat-ID fallback | Yes |
+| **Space switching** | Synthetic Dock swipe gesture, fallback Ctrl+N | No |
+| **Window movement** | Bridged `SLSBridgedMoveWindowsToManagedSpaceOperation` | No |
 
-## Approach: Mouse-Drag Simulation (no SIP required)
+The former mouse-drag simulation (grab the title bar, press Ctrl+N, release) is
+removed: it was timing-sensitive, often missed the title bar, and always dragged the
+user along to the target space. It is still in git history (`308877a`).
 
-macOS has a native behaviour: when you hold a window (mouse-down on the title bar) and
-switch spaces via Mission Control shortcuts, the window travels with you to the new
-space. We exploit this programmatically:
+## Approach: Bridged Window-Management Operations (macOS 26+)
 
-1. Read the focused window's frame via the Accessibility API (`AXUIElement`).
-2. Post a synthetic `CGEvent.leftMouseDown` at the title bar centre.
-3. Post a small `CGEvent.leftMouseDragged` to initiate the grab.
-4. Post synthetic `Ctrl+Arrow` key-down / key-up to trigger the space switch.
-5. Post a synthetic `CGEvent.leftMouseUp` to release.
+SkyLight on Tahoe contains a family of `SLSBridged*Operation` classes (subclasses of
+`SLSAsynchronousBridgedWindowManagementOperation` /
+`SLSSynchronousBridgedWindowManagementOperation`). They are `NSCoding` objects that
+SkyLight forwards to the Dock, which executes them with its own WindowServer rights.
+That is why they work with SIP enabled and need no code injection.
 
-This uses only public APIs (`CGEvent`, Accessibility), requires no SIP changes, and
-works on all tested macOS versions (Sequoia 15.x, macOS 26).
+```objc
+id op = [[SLSBridgedMoveWindowsToManagedSpaceOperation alloc] initWithWindows:@[@(wid)] spaceID:sid];
+SLSPerformAsynchronousBridgedWindowManagementOperation(op);
+```
 
-**Trade-offs:**
-- The user is switched to the target space (same as the manual drag behaviour).
-- Requires minimal timing delays (~50 ms between events with animations disabled).
-- Does not work on fullscreen or minimised windows.
-- Requires "Switch to Desktop N" shortcuts enabled in System Settings for indexed moves.
+`SLSPerformAsynchronousBridgedWindowManagementOperation` has internal linkage, so
+`dlsym` cannot find it. We resolve
+`__ZL54SLSPerformAsynchronousBridgedWindowManagementOperationP47SLSAsynchronousBridgedWindowManagementOperation`
+by walking SkyLight's `LC_SYMTAB` at runtime (`findLocalSymbol` in
+`CGSSpaceService.swift`, same technique as yabai's `macho_dlsym.h`).
+
+Verified on macOS 26.5.2 (arm64): a window owned by another process moves in ~12 ms,
+the active space does not change. yabai uses the same path since 7.1.25 (May 2026).
+
+Other bridged operations exist (`ManagedDisplaySetCurrentSpace`, `Show/HideSpaces`,
+`SpaceCreate/Destroy`, `MoveManagedSpaceToDisplayIndex`, …) but are untested; they may
+not update the Dock's own space model.
+
+## Creating, Removing and Moving Desktops
+
+Tested on macOS 26.5.2:
+
+| Operation | Result |
+|-----------|--------|
+| `SLSBridgedMoveManagedSpaceToDisplayIndexOperation` | WindowServer moves the space, **the Dock doesn't** — Mission Control keeps showing the old layout. Unusable. |
+| `SLSBridgedSpaceCreateOperation` (sync) | Returns a space ID, but the space isn't attached to any display (and can't be attached with the move op). Unusable. |
+| Mission Control via Accessibility | Works and keeps the Dock consistent. |
+
+Mission Control exposes language-independent identifiers while open:
+`mc` → `mc.display` (one per display, AX frame = display bounds) → `mc.spaces` →
+`mc.spaces.list` (desktop buttons with an `AXRemoveDesktop` action) and
+`mc.spaces.add` (add-desktop button). `MissionControl.swift` opens Mission Control,
+presses these and closes it again. There is no Dock-consistent way to move a desktop
+to another display without injection, so desktop layouts create/remove desktops and
+move *windows* instead.
+
+On disconnect macOS destroys each external display's first desktop and appends the
+remaining ones to the main display; on reconnect it creates one fresh desktop on the
+external display and leaves the others where they are.
+
+## Accessibility and Other Spaces
+
+`kAXWindowsAttribute` only lists an app's windows on currently visible spaces.
+To act on a window elsewhere, find it with `CGWindowListCopyWindowInfo(.optionAll)` +
+`SLSCopySpacesForWindows`, move it or switch to its space, then fetch the AX element.
+
+## Approach: Dock Swipe Gesture (space switching)
+
+Posting a `kCGSEventDockControl` event with `kIOHIDEventTypeDockSwipe`, a Began/Ended
+phase pair and a velocity of ±9999 switches one space instantly (no animation). One
+pair per step in Mission Control order (fullscreen spaces count). The Dock applies the
+swipe to the display under the cursor, so the cursor is warped to the target display
+first when needed. Technique from BetterTouchTool / InstantSpaceSwitcher, used by yabai
+since 7.1.19.
+
+Needs the posting process to be Accessibility-trusted; untrusted processes have their
+synthetic events silently dropped. Ctrl+N remains as fallback (desktops 1–10 only, and
+only if the shortcuts are enabled in System Settings).
 
 ## Other Projects' Approaches
 
