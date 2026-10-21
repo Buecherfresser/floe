@@ -1,6 +1,7 @@
 import AppKit
 import CoreGraphics
 import Foundation
+import MachO
 
 // MARK: - CGS / SLS Private API Types
 
@@ -9,241 +10,147 @@ typealias CGSConnectionID = Int32
 typealias CGSSpaceID = UInt64
 
 private let kCGSSpaceAll: Int32 = 7
-private let kCGSSpaceCurrent: Int32 = 5
 
-// MARK: - SIP Detection
+/// `type` value of a regular desktop in `SLSCopyManagedDisplaySpaces`.
+/// Fullscreen app spaces use 4.
+private let kCGSSpaceTypeUser = 0
 
-enum SIPStatus: Sendable {
-    case enabled
-    case disabled
-    case unknown
-}
+private let kSkyLightPath = "/System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/SkyLight"
 
-func querySIPStatus() -> SIPStatus {
-    let pipe = Pipe()
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/csrutil")
-    process.arguments = ["status"]
-    process.standardOutput = pipe
-    process.standardError = pipe
-
-    do { try process.run() } catch { return .unknown }
-    process.waitUntilExit()
-
-    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-    guard let output = String(data: data, encoding: .utf8) else { return .unknown }
-
-    if output.contains("disabled") { return .disabled }
-    if output.contains("enabled") { return .enabled }
-    return .unknown
-}
+/// Non-exported (internal linkage) SkyLight function that hands a bridged
+/// window-management operation to the Dock, which executes it with its own
+/// privileges. Works with SIP enabled — no Dock injection required.
+private let kPerformAsyncBridgedOpSymbol =
+    "__ZL54SLSPerformAsynchronousBridgedWindowManagementOperationP47SLSAsynchronousBridgedWindowManagementOperation"
 
 // MARK: - CGS / SLS Function Loading
 
-private struct CGSFunctions: Sendable {
+private struct CGSFunctions: @unchecked Sendable {
     static let shared = CGSFunctions()
 
-    let slsConnectionID: CGSConnectionID
-    let cgsConnectionID: CGSConnectionID
+    typealias ConnFunc = @convention(c) () -> Int32
+    typealias CopyDisplaySpacesFunc = @convention(c) (Int32) -> Unmanaged<CFArray>?
+    typealias ActiveSpaceFunc = @convention(c) (Int32) -> UInt64
+    typealias CopySpacesFunc = @convention(c) (Int32, Int32, CFArray) -> Unmanaged<CFArray>?
+    typealias PerformBridgedOpFunc = @convention(c) (AnyObject) -> Int64
+
+    let connectionID: CGSConnectionID
     let isLoaded: Bool
 
-    // Space enumeration & query
-    private let _copyManagedDisplaySpaces: @Sendable (CGSConnectionID) -> CFArray?
-    private let _getActiveSpace: @Sendable (CGSConnectionID, CFString) -> CGSSpaceID
-    private let _copySpacesForWindows: @Sendable (CGSConnectionID, Int32, CFArray) -> CFArray?
+    private let copyManagedDisplaySpacesFn: CopyDisplaySpacesFunc?
+    private let getActiveSpaceFn: ActiveSpaceFunc?
+    private let copySpacesForWindowsFn: CopySpacesFunc?
 
-    // Window movement
-    private let _moveWindowsToManagedSpace: @Sendable (CGSConnectionID, CFArray, CGSSpaceID) -> Void
-    let hasMoveWindows: Bool
-    private let _addWindowsToSpaces: @Sendable (CGSConnectionID, CFArray, CFArray) -> Void
-    private let _removeWindowsFromSpaces: @Sendable (CGSConnectionID, CFArray, CFArray) -> Void
-
-    // compat-ID workaround
-    private let _spaceSetCompatID: @Sendable (CGSConnectionID, CGSSpaceID, Int32) -> Int32
-    private let _setWindowListWorkspace: @Sendable (CGSConnectionID, UnsafePointer<UInt32>, Int32, Int32) -> Int32
-    let hasCompatIDPath: Bool
+    /// `nil` when SkyLight lacks the bridged-operation machinery (pre-Tahoe).
+    let performBridgedOp: PerformBridgedOpFunc?
 
     private init() {
-        typealias ConnFunc = @convention(c) () -> Int32
-        typealias CopyDisplaySpacesFunc = @convention(c) (Int32) -> CFArray?
-        typealias ActiveFunc = @convention(c) (Int32, CFString) -> UInt64
-        typealias CopySpacesFunc = @convention(c) (Int32, Int32, CFArray) -> CFArray?
-        typealias MoveWindowsFunc = @convention(c) (Int32, CFArray, UInt64) -> Void
-        typealias AddFunc = @convention(c) (Int32, CFArray, CFArray) -> Void
-        typealias RemoveFunc = @convention(c) (Int32, CFArray, CFArray) -> Void
-        typealias CompatIDFunc = @convention(c) (Int32, UInt64, Int32) -> Int32
-        typealias SetWorkspaceFunc = @convention(c) (Int32, UnsafePointer<UInt32>, Int32, Int32) -> Int32
+        let handle = dlopen(kSkyLightPath, RTLD_LAZY)
 
-        let cgHandle = dlopen(
-            "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics",
-            RTLD_LAZY
-        )
-        let slHandle = dlopen(
-            "/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight",
-            RTLD_LAZY
-        )
-
-        let resolvedSymbols = CGSFunctions.resolveSymbols(
-            cgHandle: cgHandle, slHandle: slHandle
-        )
-
-        guard let syms = resolvedSymbols else {
-            isLoaded = false; slsConnectionID = 0; cgsConnectionID = 0
-            hasMoveWindows = false; hasCompatIDPath = false
-            _copyManagedDisplaySpaces = { _ in nil }
-            _getActiveSpace = { _, _ in 0 }
-            _copySpacesForWindows = { _, _, _ in nil }
-            _moveWindowsToManagedSpace = { _, _, _ in }
-            _addWindowsToSpaces = { _, _, _ in }
-            _removeWindowsFromSpaces = { _, _, _ in }
-            _spaceSetCompatID = { _, _, _ in -1 }
-            _setWindowListWorkspace = { _, _, _, _ in -1 }
-            return
+        func sym<T>(_ name: String, as type: T.Type) -> T? {
+            guard let handle, let p = dlsym(handle, name) else { return nil }
+            return unsafeBitCast(p, to: type)
         }
 
-        let slsConnFn = unsafeBitCast(syms.pSLSConnection, to: ConnFunc.self)
-        slsConnectionID = slsConnFn()
+        copyManagedDisplaySpacesFn = sym("SLSCopyManagedDisplaySpaces", as: CopyDisplaySpacesFunc.self)
+        getActiveSpaceFn = sym("SLSGetActiveSpace", as: ActiveSpaceFunc.self)
+        copySpacesForWindowsFn = sym("SLSCopySpacesForWindows", as: CopySpacesFunc.self)
 
-        if let pCGS = syms.pCGSConnection {
-            let cgsConnFn = unsafeBitCast(pCGS, to: ConnFunc.self)
-            cgsConnectionID = cgsConnFn()
+        if let conn = sym("SLSMainConnectionID", as: ConnFunc.self) {
+            connectionID = conn()
         } else {
-            cgsConnectionID = slsConnectionID
+            connectionID = 0
         }
 
-        let displayFn = unsafeBitCast(syms.pDisplaySpaces, to: CopyDisplaySpacesFunc.self)
-        _copyManagedDisplaySpaces = { displayFn($0) }
+        performBridgedOp = findLocalSymbol(kPerformAsyncBridgedOpSymbol, inImage: kSkyLightPath)
+            .map { unsafeBitCast($0, to: PerformBridgedOpFunc.self) }
 
-        let activeFn = unsafeBitCast(syms.pActive, to: ActiveFunc.self)
-        _getActiveSpace = { activeFn($0, $1) }
+        isLoaded = connectionID != 0
+            && copyManagedDisplaySpacesFn != nil
+            && getActiveSpaceFn != nil
+            && copySpacesForWindowsFn != nil
 
-        let copyFn = unsafeBitCast(syms.pCopySpaces, to: CopySpacesFunc.self)
-        _copySpacesForWindows = { copyFn($0, $1, $2) }
-
-        if let pMoveWindows = syms.pMoveWindows {
-            let moveFn = unsafeBitCast(pMoveWindows, to: MoveWindowsFunc.self)
-            _moveWindowsToManagedSpace = { moveFn($0, $1, $2) }
-            hasMoveWindows = true
-        } else {
-            _moveWindowsToManagedSpace = { _, _, _ in }
-            hasMoveWindows = false
-        }
-
-        let addFn = unsafeBitCast(syms.pAdd, to: AddFunc.self)
-        _addWindowsToSpaces = { addFn($0, $1, $2) }
-
-        let removeFn = unsafeBitCast(syms.pRemove, to: RemoveFunc.self)
-        _removeWindowsFromSpaces = { removeFn($0, $1, $2) }
-
-        if let pCompat = syms.pCompatID, let pSetWS = syms.pSetWorkspace {
-            let compatFn = unsafeBitCast(pCompat, to: CompatIDFunc.self)
-            _spaceSetCompatID = { compatFn($0, $1, $2) }
-            let wsFn = unsafeBitCast(pSetWS, to: SetWorkspaceFunc.self)
-            _setWindowListWorkspace = { wsFn($0, $1, $2, $3) }
-            hasCompatIDPath = true
-        } else {
-            _spaceSetCompatID = { _, _, _ in -1 }
-            _setWindowListWorkspace = { _, _, _, _ in -1 }
-            hasCompatIDPath = false
-        }
-
-        isLoaded = slsConnectionID != 0
+        Log.info("CGS: loaded=\(isLoaded) cid=\(connectionID) bridgedOps=\(performBridgedOp != nil)")
     }
 
-    private struct ResolvedSymbols {
-        let pSLSConnection: UnsafeMutableRawPointer
-        let pCGSConnection: UnsafeMutableRawPointer?
-        let pDisplaySpaces: UnsafeMutableRawPointer
-        let pActive: UnsafeMutableRawPointer
-        let pCopySpaces: UnsafeMutableRawPointer
-        let pAdd: UnsafeMutableRawPointer
-        let pRemove: UnsafeMutableRawPointer
-        let pMoveWindows: UnsafeMutableRawPointer?
-        let pCompatID: UnsafeMutableRawPointer?
-        let pSetWorkspace: UnsafeMutableRawPointer?
+    func copyManagedDisplaySpaces() -> [[String: Any]] {
+        guard let fn = copyManagedDisplaySpacesFn,
+              let arr = fn(connectionID)?.takeRetainedValue() as? [[String: Any]] else { return [] }
+        return arr
     }
 
-    private static func resolveSymbols(
-        cgHandle: UnsafeMutableRawPointer?,
-        slHandle: UnsafeMutableRawPointer?
-    ) -> ResolvedSymbols? {
-        guard cgHandle != nil || slHandle != nil else { return nil }
+    /// Space shown on the display that currently has keyboard focus.
+    func activeSpace() -> CGSSpaceID {
+        getActiveSpaceFn?(connectionID) ?? 0
+    }
 
-        func sym(_ name: String) -> UnsafeMutableRawPointer? {
-            if let h = slHandle, let p = dlsym(h, name) { return p }
-            if let h = cgHandle, let p = dlsym(h, name) { return p }
+    func spaces(forWindow windowID: CGWindowID) -> [CGSSpaceID] {
+        guard let fn = copySpacesForWindowsFn else { return [] }
+        let arr = [NSNumber(value: windowID)] as CFArray
+        return fn(connectionID, kCGSSpaceAll, arr)?.takeRetainedValue() as? [UInt64] ?? []
+    }
+}
+
+// MARK: - Local Symbol Lookup
+
+/// Resolves a symbol from an image's `LC_SYMTAB`, including non-exported
+/// (local) symbols that `dlsym` cannot see.
+private func findLocalSymbol(_ name: String, inImage imagePath: String) -> UnsafeRawPointer? {
+    for i in 0..<_dyld_image_count() {
+        guard let imageName = _dyld_get_image_name(i), String(cString: imageName) == imagePath,
+              let rawHeader = _dyld_get_image_header(i) else { continue }
+
+        let slide = _dyld_get_image_vmaddr_slide(i)
+        let header = UnsafeRawPointer(rawHeader)
+        let ncmds = rawHeader.pointee.ncmds
+
+        var linkedit: segment_command_64?
+        var symtab: symtab_command?
+        var cmdPtr = header + MemoryLayout<mach_header_64>.size
+        for _ in 0..<ncmds {
+            let cmd = cmdPtr.load(as: load_command.self)
+            if cmd.cmd == LC_SEGMENT_64 {
+                let seg = cmdPtr.load(as: segment_command_64.self)
+                let segName = withUnsafeBytes(of: seg.segname) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
+                if segName == SEG_LINKEDIT { linkedit = seg }
+            } else if cmd.cmd == LC_SYMTAB {
+                symtab = cmdPtr.load(as: symtab_command.self)
+            }
+            cmdPtr += Int(cmd.cmdsize)
+        }
+
+        guard let linkedit, let symtab,
+              let base = UnsafeRawPointer(bitPattern: Int(linkedit.vmaddr) - Int(linkedit.fileoff) + slide) else {
             return nil
         }
 
-        guard let pSLSConn = sym("SLSMainConnectionID"),
-              let pDisplaySpaces = sym("SLSCopyManagedDisplaySpaces") ?? sym("CGSCopyManagedDisplaySpaces"),
-              let pActive = sym("SLSManagedDisplayGetCurrentSpace") ?? sym("CGSManagedDisplayGetCurrentSpace"),
-              let pCopySpaces = sym("SLSCopySpacesForWindows") ?? sym("CGSCopySpacesForWindows"),
-              let pAdd = sym("CGSAddWindowsToSpaces"),
-              let pRemove = sym("CGSRemoveWindowsFromSpaces")
-        else { return nil }
-
-        return ResolvedSymbols(
-            pSLSConnection: pSLSConn,
-            pCGSConnection: sym("CGSDefaultConnectionForThread"),
-            pDisplaySpaces: pDisplaySpaces,
-            pActive: pActive,
-            pCopySpaces: pCopySpaces,
-            pAdd: pAdd,
-            pRemove: pRemove,
-            pMoveWindows: sym("SLSMoveWindowsToManagedSpace"),
-            pCompatID: sym("SLSSpaceSetCompatID"),
-            pSetWorkspace: sym("SLSSetWindowListWorkspace")
-        )
-    }
-
-    // MARK: Queries
-
-    func copyManagedDisplaySpaces(_ cid: CGSConnectionID? = nil) -> CFArray? {
-        _copyManagedDisplaySpaces(cid ?? slsConnectionID)
-    }
-
-    func getActiveSpace(_ cid: CGSConnectionID? = nil) -> CGSSpaceID {
-        _getActiveSpace(cid ?? slsConnectionID, "Main" as CFString)
-    }
-
-    func copySpacesForWindows(_ mask: Int32, _ windows: CFArray, cid: CGSConnectionID? = nil) -> CFArray? {
-        _copySpacesForWindows(cid ?? slsConnectionID, mask, windows)
-    }
-
-    // MARK: Window movement
-
-    func moveWindowsToManagedSpace(_ windows: CFArray, _ spaceID: CGSSpaceID, cid: CGSConnectionID? = nil) {
-        _moveWindowsToManagedSpace(cid ?? slsConnectionID, windows, spaceID)
-    }
-
-    func addWindowsToSpaces(_ windows: CFArray, _ spaces: CFArray, cid: CGSConnectionID? = nil) {
-        _addWindowsToSpaces(cid ?? slsConnectionID, windows, spaces)
-    }
-
-    func removeWindowsFromSpaces(_ windows: CFArray, _ spaces: CFArray, cid: CGSConnectionID? = nil) {
-        _removeWindowsFromSpaces(cid ?? slsConnectionID, windows, spaces)
-    }
-
-    @discardableResult
-    func moveWindowViaCompatID(_ windowID: UInt32, toSpace spaceID: CGSSpaceID, cid: CGSConnectionID? = nil) -> Bool {
-        let c = cid ?? slsConnectionID
-        let tag: Int32 = 0x79616265
-        let err1 = _spaceSetCompatID(c, spaceID, tag)
-        var wid = windowID
-        let err2 = _setWindowListWorkspace(c, &wid, 1, tag)
-        let err3 = _spaceSetCompatID(c, spaceID, 0)
-        Log.info("CGS: compatID(cid=\(c)) errors: set=\(err1) ws=\(err2) clear=\(err3)")
-        return err2 == 0
-    }
-
-    /// Query which spaces a window belongs to.
-    func windowSpaces(_ windowID: CGWindowID) -> [CGSSpaceID] {
-        let arr = [NSNumber(value: windowID)] as CFArray
-        guard let spaces = copySpacesForWindows(kCGSSpaceAll, arr) as? [UInt64] else {
-            return []
+        let symbols = (base + Int(symtab.symoff)).assumingMemoryBound(to: nlist_64.self)
+        let strings = (base + Int(symtab.stroff)).assumingMemoryBound(to: CChar.self)
+        for s in 0..<Int(symtab.nsyms) {
+            let entry = symbols[s]
+            if strcmp(strings + Int(entry.n_un.n_strx), name) == 0 {
+                return UnsafeRawPointer(bitPattern: Int(entry.n_value) + slide)
+            }
         }
-        return spaces
+        return nil
+    }
+    return nil
+}
+
+// MARK: - Space Model
+
+/// One entry of `SLSCopyManagedDisplaySpaces`.
+struct ManagedDisplay {
+    /// Display UUID, or `"Main"` when "Displays have separate Spaces" is off.
+    let identifier: String
+    /// All spaces on this display in Mission Control order (desktops and fullscreen apps).
+    let spaces: [(id: CGSSpaceID, isUser: Bool)]
+    let currentSpace: CGSSpaceID
+
+    var userSpaceIDs: [CGSSpaceID] { spaces.filter(\.isUser).map(\.id) }
+
+    func missionControlIndex(of space: CGSSpaceID) -> Int? {
+        spaces.firstIndex { $0.id == space }
     }
 }
 
@@ -253,208 +160,146 @@ enum CGSSpaceService {
 
     static var isAvailable: Bool { CGSFunctions.shared.isLoaded }
 
-    // MARK: - Space Enumeration
-
-    static func userSpaceIDs() -> [CGSSpaceID] {
-        let fns = CGSFunctions.shared
-        guard fns.isLoaded else { return [] }
-
-        guard let displays = fns.copyManagedDisplaySpaces() as? [[String: Any]] else {
-            return []
-        }
-
-        var result: [CGSSpaceID] = []
-        for display in displays {
-            guard let spaces = display["Spaces"] as? [[String: Any]] else { continue }
-            for space in spaces {
-                let type = space["type"] as? Int ?? -1
-                guard type == 0 else { continue }
-                if let id64 = space["id64"] as? UInt64 {
-                    result.append(id64)
-                } else if let id = space["ManagedSpaceID"] as? Int {
-                    result.append(CGSSpaceID(id))
-                }
-            }
-        }
-        return result
+    /// Whether windows can be moved between spaces via bridged operations.
+    static var canMoveWindows: Bool {
+        CGSFunctions.shared.isLoaded && CGSFunctions.shared.performBridgedOp != nil
     }
 
+    // MARK: - Space Enumeration
+
+    /// Managed displays in Floe's monitor order (see `Monitors.ordered()`).
+    static func displays() -> [ManagedDisplay] {
+        let order = Monitors.ordered().map(\.uuid)
+        func rank(_ display: ManagedDisplay) -> Int {
+            order.firstIndex { $0.caseInsensitiveCompare(display.identifier) == .orderedSame } ?? order.count
+        }
+        return unorderedDisplays().enumerated()
+            .sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }
+            .map(\.element)
+    }
+
+    private static func unorderedDisplays() -> [ManagedDisplay] {
+        CGSFunctions.shared.copyManagedDisplaySpaces().compactMap { display in
+            guard let identifier = display["Display Identifier"] as? String,
+                  let rawSpaces = display["Spaces"] as? [[String: Any]] else { return nil }
+
+            let spaces: [(id: CGSSpaceID, isUser: Bool)] = rawSpaces.compactMap { space in
+                guard let id = spaceID(of: space) else { return nil }
+                return (id, (space["type"] as? Int) == kCGSSpaceTypeUser)
+            }
+            let current = (display["Current Space"] as? [String: Any]).flatMap(spaceID(of:)) ?? 0
+            return ManagedDisplay(identifier: identifier, spaces: spaces, currentSpace: current)
+        }
+    }
+
+    private static func spaceID(of space: [String: Any]) -> CGSSpaceID? {
+        if let id64 = space["id64"] as? UInt64 { return id64 }
+        if let id = space["ManagedSpaceID"] as? Int { return CGSSpaceID(id) }
+        return nil
+    }
+
+    /// All desktops across displays, in Floe's desktop-number order.
+    static func userSpaceIDs() -> [CGSSpaceID] {
+        displays().flatMap(\.userSpaceIDs)
+    }
+
+    /// Space ID of "Desktop N" (1-based, counted across displays).
     static func spaceID(forIndex index: Int) -> CGSSpaceID? {
         let spaces = userSpaceIDs()
         guard index >= 1, index <= spaces.count else { return nil }
         return spaces[index - 1]
     }
 
-    // MARK: - Window Movement
-
-    static var canMoveWindows: Bool {
-        CGSFunctions.shared.isLoaded
+    static func display(containing space: CGSSpaceID) -> ManagedDisplay? {
+        displays().first { $0.spaces.contains { $0.id == space } }
     }
 
-    /// Moves a window to the target space.
-    ///
-    /// Tries every available strategy with diagnostic logging.
-    /// Checks `CGSCopySpacesForWindows` after each attempt to verify
-    /// whether the window actually moved.
-    static func moveWindow(_ windowID: CGWindowID, toSpace targetSpaceID: CGSSpaceID) -> Bool {
-        let fns = CGSFunctions.shared
-        guard fns.isLoaded else { return false }
-
-        let slsCid = fns.slsConnectionID
-        let cgsCid = fns.cgsConnectionID
-
-        Log.info("CGS: moveWindow(\(windowID) → space \(targetSpaceID)) slsCid=\(slsCid) cgsCid=\(cgsCid)")
-
-        let beforeSpaces = fns.windowSpaces(windowID)
-        Log.info("CGS: window \(windowID) currently on spaces: \(beforeSpaces)")
-
-        if beforeSpaces.contains(targetSpaceID) {
-            Log.info("CGS: window already on target space")
-            return true
-        }
-
-        let windowArr = [NSNumber(value: windowID)] as CFArray
-
-        // Strategy 1: SLSMoveWindowsToManagedSpace (with SLS connection)
-        if fns.hasMoveWindows {
-            Log.info("CGS: [1] SLSMoveWindowsToManagedSpace(slsCid=\(slsCid))")
-            fns.moveWindowsToManagedSpace(windowArr, targetSpaceID, cid: slsCid)
-            let after = fns.windowSpaces(windowID)
-            if after.contains(targetSpaceID) {
-                Log.info("CGS: [1] SUCCESS — window now on spaces: \(after)")
-                return true
-            }
-            Log.info("CGS: [1] no effect — window still on: \(after)")
-        }
-
-        // Strategy 1b: SLSMoveWindowsToManagedSpace (with CGS connection)
-        if fns.hasMoveWindows && cgsCid != slsCid {
-            Log.info("CGS: [1b] SLSMoveWindowsToManagedSpace(cgsCid=\(cgsCid))")
-            fns.moveWindowsToManagedSpace(windowArr, targetSpaceID, cid: cgsCid)
-            let after = fns.windowSpaces(windowID)
-            if after.contains(targetSpaceID) {
-                Log.info("CGS: [1b] SUCCESS — window now on spaces: \(after)")
-                return true
-            }
-            Log.info("CGS: [1b] no effect — window still on: \(after)")
-        }
-
-        // Strategy 2: add target, remove old
-        do {
-            Log.info("CGS: [2] CGSAddWindowsToSpaces + CGSRemoveWindowsFromSpaces (slsCid=\(slsCid))")
-            let spaceArr = [NSNumber(value: targetSpaceID)] as CFArray
-            fns.addWindowsToSpaces(windowArr, spaceArr, cid: slsCid)
-            let afterAdd = fns.windowSpaces(windowID)
-            Log.info("CGS: [2] after add: \(afterAdd)")
-            let toRemove = afterAdd.filter { $0 != targetSpaceID }
-            if !toRemove.isEmpty {
-                let removeArr = toRemove.map { NSNumber(value: $0) } as CFArray
-                fns.removeWindowsFromSpaces(windowArr, removeArr, cid: slsCid)
-            }
-            let afterRemove = fns.windowSpaces(windowID)
-            if afterRemove.contains(targetSpaceID) && !afterRemove.contains(where: { beforeSpaces.contains($0) && $0 != targetSpaceID }) {
-                Log.info("CGS: [2] SUCCESS — window now on spaces: \(afterRemove)")
-                return true
-            }
-            Log.info("CGS: [2] no effect — window still on: \(afterRemove)")
-        }
-
-        // Strategy 2b: same with CGS connection
-        if cgsCid != slsCid {
-            Log.info("CGS: [2b] CGSAddWindowsToSpaces + CGSRemoveWindowsFromSpaces (cgsCid=\(cgsCid))")
-            let spaceArr = [NSNumber(value: targetSpaceID)] as CFArray
-            fns.addWindowsToSpaces(windowArr, spaceArr, cid: cgsCid)
-            let afterAdd = fns.windowSpaces(windowID)
-            Log.info("CGS: [2b] after add: \(afterAdd)")
-            let toRemove = afterAdd.filter { $0 != targetSpaceID }
-            if !toRemove.isEmpty {
-                let removeArr = toRemove.map { NSNumber(value: $0) } as CFArray
-                fns.removeWindowsFromSpaces(windowArr, removeArr, cid: cgsCid)
-            }
-            let afterRemove = fns.windowSpaces(windowID)
-            if afterRemove.contains(targetSpaceID) {
-                Log.info("CGS: [2b] SUCCESS — window now on spaces: \(afterRemove)")
-                return true
-            }
-            Log.info("CGS: [2b] no effect — window still on: \(afterRemove)")
-        }
-
-        // Strategy 3: compat-ID workaround
-        if fns.hasCompatIDPath {
-            Log.info("CGS: [3] compat-ID workaround (slsCid=\(slsCid))")
-            fns.moveWindowViaCompatID(windowID, toSpace: targetSpaceID, cid: slsCid)
-            let after = fns.windowSpaces(windowID)
-            if after.contains(targetSpaceID) {
-                Log.info("CGS: [3] SUCCESS — window now on spaces: \(after)")
-                return true
-            }
-            Log.info("CGS: [3] no effect — window still on: \(after)")
-        }
-
-        Log.info("CGS: all strategies exhausted — window move failed")
-        return false
-    }
-
-    @discardableResult
-    static func moveWindow(_ windowID: CGWindowID, toSpaceAt index: Int) -> Bool {
-        guard let sid = spaceID(forIndex: index) else {
-            Log.info("CGS: no space ID found for index \(index)")
-            return false
-        }
-        return moveWindow(windowID, toSpace: sid)
+    /// The desktop adjacent to `space` on the same display, skipping fullscreen
+    /// spaces. Returns `nil` at either end (no wrap-around, matching Ctrl+Arrow).
+    static func adjacentUserSpace(to space: CGSSpaceID, offset: Int) -> CGSSpaceID? {
+        guard let display = display(containing: space) else { return nil }
+        let userSpaces = display.userSpaceIDs
+        guard let idx = userSpaces.firstIndex(of: space) else { return nil }
+        let target = idx + offset
+        guard userSpaces.indices.contains(target) else { return nil }
+        return userSpaces[target]
     }
 
     // MARK: - Query
 
     static func currentSpaceID() -> CGSSpaceID {
-        let fns = CGSFunctions.shared
-        guard fns.isLoaded else { return 0 }
-        return fns.getActiveSpace()
+        CGSFunctions.shared.activeSpace()
     }
 
     static func currentSpaceIndex() -> Int? {
         let current = currentSpaceID()
         guard current != 0 else { return nil }
-        if let idx = userSpaceIDs().firstIndex(of: current) {
-            return idx + 1
-        }
-        return nil
+        return userSpaceIDs().firstIndex(of: current).map { $0 + 1 }
     }
 
-    // MARK: - Verification
+    static func spaces(forWindow windowID: CGWindowID) -> [CGSSpaceID] {
+        CGSFunctions.shared.spaces(forWindow: windowID)
+    }
 
-    static func verifyFunctional() -> Bool {
+    // MARK: - Window Movement
+
+    /// How long to wait for the Dock to apply an asynchronous bridged move.
+    private static let kMoveConfirmTimeout: TimeInterval = 0.25
+    private static let kMoveConfirmPollInterval: useconds_t = 5_000 // 5 ms
+
+    /// Moves a window to the target space without switching spaces.
+    ///
+    /// Uses `SLSBridgedMoveWindowsToManagedSpaceOperation`, which SkyLight
+    /// forwards to the Dock for execution — so it works with SIP enabled and
+    /// needs no code injection. Blocks briefly until the move is observable.
+    @discardableResult
+    static func moveWindow(_ windowID: CGWindowID, toSpace spaceID: CGSSpaceID) -> Bool {
         let fns = CGSFunctions.shared
-        guard fns.isLoaded else {
-            Log.info("CGS: symbols not loaded")
+        guard fns.isLoaded, let perform = fns.performBridgedOp else {
+            Log.error("CGS: bridged window operations unavailable on this macOS version")
             return false
         }
-        Log.info("CGS: slsConnectionID=\(fns.slsConnectionID), cgsConnectionID=\(fns.cgsConnectionID)")
 
-        let spaces = userSpaceIDs()
-        guard !spaces.isEmpty else {
-            Log.info("CGS: space enumeration returned empty list")
+        if fns.spaces(forWindow: windowID).contains(spaceID) {
+            Log.info("CGS: window \(windowID) already on space \(spaceID)")
+            return true
+        }
+
+        WindowTouches.note(windowID)
+        guard let op = makeMoveOperation(windows: [windowID], spaceID: spaceID) else {
+            Log.error("CGS: could not create SLSBridgedMoveWindowsToManagedSpaceOperation")
             return false
         }
-        Log.info("CGS: enumerated \(spaces.count) user space(s): \(spaces)")
-        Log.info("CGS: current space ID = \(currentSpaceID()), index = \(currentSpaceIndex() ?? -1)")
+        _ = perform(op)
 
-        Log.info("CGS: APIs — hasMoveWindows=\(fns.hasMoveWindows), hasCompatID=\(fns.hasCompatIDPath)")
-
-        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-        if let windowList = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]],
-           let windowInfo = windowList.first(where: {
-               ($0[kCGWindowLayer as String] as? Int) == 0
-           }),
-           let windowID = windowInfo[kCGWindowNumber as String] as? CGWindowID {
-            let memberSpaces = fns.windowSpaces(windowID)
-            Log.info("CGS: test window \(windowID) on spaces: \(memberSpaces)")
-            if memberSpaces.isEmpty {
-                Log.info("CGS: copySpacesForWindows returned empty — APIs may be neutered")
+        let deadline = Date().addingTimeInterval(kMoveConfirmTimeout)
+        while Date() < deadline {
+            if fns.spaces(forWindow: windowID).contains(spaceID) {
+                Log.info("CGS: moved window \(windowID) to space \(spaceID)")
+                return true
             }
+            usleep(kMoveConfirmPollInterval)
         }
 
-        Log.info("CGS: verification passed")
-        return true
+        Log.error("CGS: window \(windowID) did not arrive on space \(spaceID) (now on \(fns.spaces(forWindow: windowID)))")
+        return false
+    }
+
+    /// `[[SLSBridgedMoveWindowsToManagedSpaceOperation alloc] initWithWindows:spaceID:]`
+    private static func makeMoveOperation(windows: [CGWindowID], spaceID: CGSSpaceID) -> AnyObject? {
+        typealias AllocFn = @convention(c) (AnyClass, Selector) -> Unmanaged<AnyObject>
+        typealias InitFn = @convention(c) (AnyObject, Selector, NSArray, UInt64) -> Unmanaged<AnyObject>?
+
+        guard let cls = NSClassFromString("SLSBridgedMoveWindowsToManagedSpaceOperation"),
+              let msgSend = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "objc_msgSend") else { return nil } // RTLD_DEFAULT
+
+        let alloc = unsafeBitCast(msgSend, to: AllocFn.self)
+        let initialize = unsafeBitCast(msgSend, to: InitFn.self)
+
+        // alloc returns +1; init consumes it and returns a +1 instance.
+        let allocated = alloc(cls, NSSelectorFromString("alloc")).takeUnretainedValue()
+        let windowList = windows.map { NSNumber(value: $0) } as NSArray
+        return initialize(allocated, NSSelectorFromString("initWithWindows:spaceID:"), windowList, spaceID)?
+            .takeRetainedValue()
     }
 }
