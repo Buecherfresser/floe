@@ -128,6 +128,17 @@ enum Diagnostics {
                 Thread.sleep(forTimeInterval: 0.1)
             }
             return out
+        case "close":
+            // close <app name> — presses the close button of the app's standard windows
+            guard command.count > 1,
+                  let app = NSWorkspace.shared.runningApplications.first(where: { $0.localizedName == command[1] }) else { return "no app\n" }
+            var closed = 0
+            for window in children(of: AXUIElementCreateApplication(app.processIdentifier), attribute: kAXWindowsAttribute)
+            where stringAttribute(window, kAXSubroleAttribute) == kAXStandardWindowSubrole {
+                if let button = elementAttribute(window, kAXCloseButtonAttribute),
+                   AXUIElementPerformAction(button, kAXPressAction as CFString) == .success { closed += 1 }
+            }
+            return "closed=\(closed)\n"
         case "untile":
             guard command.count > 1,
                   let app = NSWorkspace.shared.runningApplications.first(where: { $0.localizedName == command[1] }),
