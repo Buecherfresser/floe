@@ -172,6 +172,7 @@ final class FocusFollowsMouse: @unchecked Sendable {
 
         Log.debug("FFM: focusing wid=\(wid) pid=\(pid) (\(name)), previousWid=\(lastFocusedWindowID)")
         lastFocusedWindowID = wid
+        WindowHistory.note(pid: pid, windowID: wid)
 
         let ax = accessibilityService
         let origin = windowInfo.bounds.origin

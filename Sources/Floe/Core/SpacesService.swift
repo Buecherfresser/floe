@@ -50,8 +50,32 @@ final class SpacesService: @unchecked Sendable {
     /// Serializes space operations so rapid hotkey presses don't interleave.
     private let queue = DispatchQueue(label: "com.jonasdrechsel.floe.spaces", qos: .userInteractive)
 
+    private var activationObserver: NSObjectProtocol?
+
     init(accessibilityService: AccessibilityService) {
         self.accessibilityService = accessibilityService
+
+        // Remember each app's front window whenever it becomes active, so
+        // the app switcher can jump back to exactly that window.
+        activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: nil
+        ) { [weak self] notification in
+            guard let self,
+                  let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+            self.queue.async { self.noteFocusedWindow(of: app.processIdentifier) }
+        }
+    }
+
+    deinit {
+        if let activationObserver { NSWorkspace.shared.notificationCenter.removeObserver(activationObserver) }
+    }
+
+    private func noteFocusedWindow(of pid: pid_t) {
+        var windowRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(AXUIElementCreateApplication(pid), kAXFocusedWindowAttribute as CFString, &windowRef) == .success,
+              let windowRef, CFGetTypeID(windowRef) == AXUIElementGetTypeID(),
+              let windowID = accessibilityService.windowID(of: windowRef as! AXUIElement) else { return }
+        WindowHistory.note(pid: pid, windowID: windowID)
     }
 
     // MARK: - Space Switching
@@ -371,7 +395,7 @@ final class SpacesService: @unchecked Sendable {
     /// after a space switch or move.
     @discardableResult
     private func focusWindow(id windowID: CGWindowID, of app: NSRunningApplication) -> FocusedWindow? {
-        let deadline = Date().addingTimeInterval(0.5)
+        let deadline = Date().addingTimeInterval(0.3)
         repeat {
             if let element = axWindow(id: windowID, pid: app.processIdentifier) {
                 let window = FocusedWindow(id: windowID, pid: app.processIdentifier, element: element)
@@ -411,10 +435,17 @@ final class SpacesService: @unchecked Sendable {
     /// other spaces.
     private func mostRecentWindowID(of app: NSRunningApplication) -> CGWindowID? {
         let pid = app.processIdentifier
+        let userSpaces = Set(CGSSpaceService.userSpaceIDs())
+
+        // The window this app last had in front, if it's still on a desktop.
+        if let last = WindowHistory.lastWindow(of: pid),
+           CGSSpaceService.spaces(forWindow: last).contains(where: userSpaces.contains) {
+            return last
+        }
+
         guard let infoList = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[CFString: Any]] else {
             return nil
         }
-        let userSpaces = Set(CGSSpaceService.userSpaceIDs())
         for info in infoList {
             guard (info[kCGWindowOwnerPID] as? pid_t) == pid,
                   (info[kCGWindowLayer] as? Int) == 0,
@@ -478,6 +509,7 @@ final class SpacesService: @unchecked Sendable {
     }
 
     private func focusWindow(_ window: FocusedWindow) {
+        WindowHistory.note(pid: window.pid, windowID: window.id)
         FocusFollowsMouse.ignoreCurrentHover()
         accessibilityService.focusApp(pid: window.pid)
         AXUIElementSetAttributeValue(window.element, kAXMainAttribute as CFString, kCFBooleanTrue)
