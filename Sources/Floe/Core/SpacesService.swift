@@ -179,15 +179,17 @@ final class SpacesService: @unchecked Sendable {
     }
 
     /// Switching a display's space doesn't move keyboard focus to that display.
-    /// Focus its frontmost window; on an empty desktop bring Finder (which owns
-    /// the desktop) forward, so "move focused window" hotkeys can't act on a
-    /// window on the other display.
+    /// Focus the desktop's frontmost window. Right after a switch the window
+    /// list may not show the new desktop's windows yet, so give it a moment.
+    /// An empty desktop keeps the old focus: activating another app (Finder)
+    /// would make macOS jump to wherever that app has a window.
     private func takeKeyboardFocus(space target: CGSSpaceID) {
-        if focusFrontmostWindow(onSpace: target) { return }
-        guard let finder = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first else { return }
-        FocusFollowsMouse.ignoreCurrentHover()
-        accessibilityService.focusApp(pid: finder.processIdentifier)
-        Log.info("Spaces: desktop \(target) is empty, focused Finder")
+        let deadline = Date().addingTimeInterval(0.2)
+        repeat {
+            if focusFrontmostWindow(onSpace: target) { return }
+            usleep(25_000)
+        } while Date() < deadline
+        Log.info("Spaces: no window to focus on space \(target)")
     }
 
     /// Mouse follows focus: after jumping to a window, put the cursor into it
