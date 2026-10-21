@@ -482,11 +482,22 @@ final class TilingService: @unchecked Sendable {
                     refusedAny = true
                     continue
                 }
-                // Float only if the refusal is still there on a re-check at
-                // least `refusalRecheckDelay` later.
+                // Learn the minimum size and widen the tile next time. Float
+                // only if even the widened tile doesn't fit and that is still
+                // the case on a re-check at least `refusalRecheckDelay` later.
+                var learnedLarger = false
+                if refused {
+                    let known = minSizes[windowID] ?? .zero
+                    let learned = CGSize(width: max(known.width, actual.width), height: max(known.height, actual.height))
+                    learnedLarger = learned.width > known.width + 1 || learned.height > known.height + 1
+                    minSizes[windowID] = learned
+                    if learnedLarger {
+                        Log.info("Tiling: wid=\(windowID) needs at least \(learned) — widening its tile")
+                    }
+                }
                 let now = DispatchTime.now()
                 let confirmed = lock.withLock { () -> Bool in
-                    guard refused else { firstRefusal[windowID] = nil; return false }
+                    guard refused, !learnedLarger else { firstRefusal[windowID] = nil; return false }
                     guard let first = firstRefusal[windowID] else { firstRefusal[windowID] = now; return false }
                     return now >= first + Self.refusalRecheckDelay
                 }
@@ -521,7 +532,7 @@ final class TilingService: @unchecked Sendable {
         skipping skipped: Set<CGWindowID> = []
     ) -> [(CGWindowID, CGRect)] {
         guard let layout = screenLayouts[key] else { return [] }
-        let tree = layout.baseTree.applying(ratios: userRatios(onScreen: key) ?? [:])
+        let tree = effectiveTree(for: layout, key: key)
         let frames = tree.calculateFrames(in: layout.rect, innerGap: layout.innerGap, outerGap: layout.outerGap)
         let elements = elements ?? lock.withLock { windowElements }
 
@@ -551,6 +562,33 @@ final class TilingService: @unchecked Sendable {
             applied.append((windowID, frame))
         }
         return applied
+    }
+
+    /// The screen's tree with the user's ratios, then widened where a window's
+    /// tile is smaller than its known minimum size.
+    private func effectiveTree(for layout: ScreenLayout, key: String) -> BSPNode {
+        var tree = layout.baseTree.applying(ratios: userRatios(onScreen: key) ?? [:])
+        for windowID in layout.windowIDs {
+            guard let minimum = minSizes[windowID] else { continue }
+            let frames = tree.calculateFrames(in: layout.rect, innerGap: layout.innerGap, outerGap: layout.outerGap)
+            guard let tile = frames.first(where: { $0.0 == windowID })?.1 else { continue }
+            let dw = minimum.width - tile.width
+            let dh = minimum.height - tile.height
+            guard dw > 1 || dh > 1 else { continue }
+
+            let edges = tree.movableEdges(of: windowID)
+            var target = tile
+            if dw > 1 {
+                if edges.right { target.size.width += dw } else if edges.left { target.origin.x -= dw; target.size.width += dw }
+            }
+            if dh > 1 {
+                if edges.bottom { target.size.height += dh } else if edges.top { target.origin.y -= dh; target.size.height += dh }
+            }
+            let changes = tree.ratios(fitting: windowID, to: target, in: layout.rect,
+                                      innerGap: layout.innerGap, outerGap: layout.outerGap)
+            if !changes.isEmpty { tree = tree.applying(ratios: changes) }
+        }
+        return tree
     }
 
     private func publishTiledFrames() {
@@ -595,8 +633,12 @@ final class TilingService: @unchecked Sendable {
         if let applied = appliedFrames[windowID], DispatchTime.now() < applied.time + Self.ownChangeWindow {
             // Normally our own change — unless the window jumped right back
             // to where it was. Twice in a row: something holds it there.
-            if let previous = previousFrames[windowID], frame.isApproximately(previous),
-               !applied.frame.isApproximately(previous) {
+            // A window with a minimum size keeps the position we gave it and
+            // only stays larger. Held means it moved back.
+            let movedBack = abs(frame.minX - applied.frame.minX) > 2 || abs(frame.minY - applied.frame.minY) > 2
+            if movedBack, !acceptedTile.contains(windowID),
+               let previous = previousFrames[windowID], frame.isApproximately(previous),
+               !applied.frame.isApproximately(previous, tolerance: Self.sizeRefusalTolerance) {
                 let fights = (holdFights[windowID] ?? 0) + 1
                 holdFights[windowID] = fights
                 if fights >= 2 {
