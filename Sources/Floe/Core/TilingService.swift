@@ -366,6 +366,7 @@ final class TilingService: @unchecked Sendable {
     private func performRetile() {
         let cfg = config
         guard cfg.enabled else { return }
+        let started = DispatchTime.now()
 
         let screens = Self.screenRects()
         guard !screens.isEmpty else {
@@ -522,7 +523,8 @@ final class TilingService: @unchecked Sendable {
         screenLayouts = screenLayouts.filter { activeKeys.contains($0.key) }
         publishTiledFrames()
 
-        Log.info("Tiling: applied \(applied) window frame(s) across \(windowsByScreen.count) screen(s)")
+        let elapsed = (DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000
+        Log.info("Tiling: applied \(applied) window frame(s) across \(windowsByScreen.count) screen(s) in \(elapsed) ms")
 
         // Re-tile without the windows that couldn't fill their tile.
         if refusedAny { scheduleRetile(after: Self.refusalRecheckDelay) }
@@ -731,6 +733,9 @@ final class TilingService: @unchecked Sendable {
     private func finishUserInteraction(at mouse: CGPoint) {
         let adjusted = userAdjustedWindowIDs
         userAdjustedWindowIDs.removeAll()
+        // The dropped window reports its last moves right after mouse-up —
+        // those are the drag ending, not the app moving it.
+        for windowID in adjusted { WindowTouches.note(windowID) }
 
         // A held window the user just dragged out of its frame rejoins.
         if !heldFrames.isEmpty {
@@ -770,7 +775,10 @@ final class TilingService: @unchecked Sendable {
                 Log.info("Tiling: swapped wid=\(windowID) with wid=\(target)")
             }
         }
-        scheduleRetile()
+        // Rearrange right away instead of after the usual debounce.
+        pendingRetile?.cancel()
+        pendingRetile = nil
+        performRetile()
     }
 
     private func tiledWindow(at point: CGPoint, excluding excluded: CGWindowID) -> CGWindowID? {
