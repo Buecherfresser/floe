@@ -10,28 +10,34 @@ final class ActionDispatcher: @unchecked Sendable {
         self.spacesService = spacesService
     }
 
+    /// A window leaving the current space produces no AX notification, so
+    /// retile explicitly once the move has completed.
+    private var retileAfterMove: @Sendable () -> Void {
+        { [weak self] in self?.tilingService?.retile() }
+    }
+
     func dispatch(_ action: Action) {
         switch action {
         case .focusSpace(let index):
             spacesService.focusSpace(at: index)
 
         case .moveWindowToSpace(let index):
-            spacesService.moveWindowToSpace(at: index)
+            spacesService.moveWindowToSpace(at: index, completion: retileAfterMove)
 
         case .moveWindowToSpaceNext:
-            spacesService.moveWindowToNextSpace()
+            spacesService.moveWindowToNextSpace(completion: retileAfterMove)
 
         case .moveWindowToSpacePrev:
-            spacesService.moveWindowToPreviousSpace()
+            spacesService.moveWindowToPreviousSpace(completion: retileAfterMove)
 
         case .moveWindowToSpaceAndReturn(let index):
-            spacesService.moveWindowToSpaceAndReturn(at: index)
+            spacesService.moveWindowToSpaceAndReturn(at: index, completion: retileAfterMove)
 
         case .moveWindowToSpaceNextAndReturn:
-            spacesService.moveWindowToNextSpaceAndReturn()
+            spacesService.moveWindowToNextSpaceAndReturn(completion: retileAfterMove)
 
         case .moveWindowToSpacePrevAndReturn:
-            spacesService.moveWindowToPreviousSpaceAndReturn()
+            spacesService.moveWindowToPreviousSpaceAndReturn(completion: retileAfterMove)
 
         case .focusSpaceNext:
             spacesService.focusNextSpace()
@@ -39,13 +45,19 @@ final class ActionDispatcher: @unchecked Sendable {
         case .focusSpacePrev:
             spacesService.focusPreviousSpace()
 
+        case .focusApp(let bundleID):
+            spacesService.focusApp(bundleID: bundleID)
+
+        case .pullApp(let bundleID):
+            spacesService.pullApp(bundleID: bundleID, completion: retileAfterMove)
+
         case .toggleTiling:
             DispatchQueue.main.async { [weak self] in
                 self?.configManager?.update { $0.tiling.enabled.toggle() }
             }
 
         case .balanceWindows:
-            tilingService?.retile()
+            tilingService?.balance()
 
         case .increaseSplitRatio:
             DispatchQueue.main.async { [weak self] in
