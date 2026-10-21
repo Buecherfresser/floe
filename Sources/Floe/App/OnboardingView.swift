@@ -82,7 +82,8 @@ struct OnboardingView: View {
     @ViewBuilder
     private var readyCard: some View {
         VStack(spacing: 12) {
-            Text("Focus follows mouse is ready.")
+            Text("Windows tile on their own. ⌃1–9 switches desktops and ⌃⇧1–9 sends the focused window there. Everything else is in Settings.")
+                .multilineTextAlignment(.center)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 

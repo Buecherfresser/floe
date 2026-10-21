@@ -13,8 +13,20 @@ final class HotkeyService: @unchecked Sendable {
     private var tapThread: Thread?
     private var tapRunLoop: CFRunLoop?
 
+    /// While Settings records a new hotkey, every key goes to Settings.
+    nonisolated(unsafe) private static var suspended = false
+    private static let suspendLock = NSLock()
+
+    static func setSuspended(_ value: Bool) {
+        suspendLock.withLock { suspended = value }
+    }
+
+    private static var isSuspended: Bool {
+        suspendLock.withLock { suspended }
+    }
+
     /// Arrows, F1–F20, Home/End/Page Up/Page Down, Help, Forward Delete.
-    private static let implicitFnKeyCodes: Set<CGKeyCode> = [
+    static let implicitFnKeyCodes: Set<CGKeyCode> = [
         123, 124, 125, 126,
         122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111, 105, 107, 113, 106, 64, 79, 80, 90,
         115, 119, 116, 121, 114, 117,
@@ -147,6 +159,7 @@ final class HotkeyService: @unchecked Sendable {
         }
 
         guard type == .keyDown || type == .keyUp else { return event }
+        guard !Self.isSuspended else { return event }
 
         // Pass through synthetic events posted by SpacesService
         if event.getIntegerValueField(.eventSourceUserData) == kSyntheticEventTag {
