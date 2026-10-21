@@ -23,7 +23,44 @@ final class FocusFollowsMouse: @unchecked Sendable {
     private var trailingWorkItem: DispatchWorkItem?
 
     private static let ignoredWindowOwners: Set<String> = ["Window Server", "Dock"]
+
+    /// Set after Floe focuses a window itself (hotkeys, app switcher): the
+    /// window under the cursor at that moment must not steal focus back —
+    /// only entering a different window does.
+    nonisolated(unsafe) private static var ignoreHoverFlag = false
+    private static let ignoreHoverLock = NSLock()
+
+    static func ignoreCurrentHover() {
+        ignoreHoverLock.withLock { ignoreHoverFlag = true }
+    }
+
+    /// While a space switch is in flight the window list still shows the old
+    /// space's windows — focusing one makes macOS switch right back to it.
+    nonisolated(unsafe) private static var suppressedUntil = DispatchTime(uptimeNanoseconds: 0)
+
+    static func suppress(for interval: DispatchTimeInterval = .milliseconds(500)) {
+        ignoreHoverLock.withLock {
+            let until = DispatchTime.now() + interval
+            if until > suppressedUntil { suppressedUntil = until }
+        }
+    }
+
+    private static var isSuppressed: Bool {
+        ignoreHoverLock.withLock { DispatchTime.now() < suppressedUntil }
+    }
+
+    private var spaceChangeObserver: NSObjectProtocol?
+
+    private static func consumeIgnoreHover() -> Bool {
+        ignoreHoverLock.withLock {
+            defer { ignoreHoverFlag = false }
+            return ignoreHoverFlag
+        }
+    }
     private static let minimumWindowLayer = 0
+    /// Layers at or above this (status bar, screen saver, cursor) are system
+    /// chrome rather than app overlays.
+    private static let overlayLayerLimit = Int(CGWindowLevelForKey(.statusWindow))
     private static let ownPID = ProcessInfo.processInfo.processIdentifier
 
     init(accessibilityService: AccessibilityService, config: FocusFollowsMouseConfig) {
@@ -39,9 +76,20 @@ final class FocusFollowsMouse: @unchecked Sendable {
         }
         service.start()
         eventTapService = service
+
+        // Covers the user's own trackpad swipes and Ctrl+Arrow too.
+        spaceChangeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: nil
+        ) { _ in
+            FocusFollowsMouse.suppress()
+        }
     }
 
     func stop() {
+        if let spaceChangeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(spaceChangeObserver)
+        }
+        spaceChangeObserver = nil
         eventTapService?.stop()
         eventTapService = nil
         trailingWorkItem?.cancel()
@@ -61,7 +109,7 @@ final class FocusFollowsMouse: @unchecked Sendable {
 
     /// All throttle bookkeeping happens here, serialized on throttleQueue.
     private func throttledLookup(at point: CGPoint, config: FocusFollowsMouseConfig) {
-        let now = mach_absolute_time()
+        let now = DispatchTime.now().uptimeNanoseconds
         let intervalNanos = UInt64(max(0, config.delay)) * 1_000_000
 
         trailingWorkItem?.cancel()
@@ -75,7 +123,7 @@ final class FocusFollowsMouse: @unchecked Sendable {
             let remaining = intervalNanos &- elapsed
             let remainingMs = Int(remaining / 1_000_000)
             let workItem = DispatchWorkItem { [weak self] in
-                self?.lastLookupTime = mach_absolute_time()
+                self?.lastLookupTime = DispatchTime.now().uptimeNanoseconds
                 self?.focusWindowUnderCursor(at: point, config: config)
             }
             trailingWorkItem = workItem
@@ -96,7 +144,23 @@ final class FocusFollowsMouse: @unchecked Sendable {
         let wid = windowInfo.windowID
         let name = windowInfo.ownerName ?? "<unknown>"
 
+        if Self.consumeIgnoreHover() {
+            lastFocusedWindowID = wid
+            return
+        }
+        if MissionControl.isBusy || Self.isSuppressed {
+            return
+        }
+
         if wid == lastFocusedWindowID {
+            return
+        }
+
+        // Right after a space switch the window list still reports the old
+        // space's windows as on-screen. Focusing one of them activates its app,
+        // and macOS then switches back to that app's space.
+        guard Self.isOnVisibleSpace(wid, at: point) else {
+            Log.debug("FFM: wid=\(wid) is not on a visible space (space switch in progress), skipping")
             return
         }
 
@@ -118,6 +182,21 @@ final class FocusFollowsMouse: @unchecked Sendable {
     }
 
     // MARK: - Window Lookup
+
+    private static func isOnVisibleSpace(_ windowID: CGWindowID, at point: CGPoint) -> Bool {
+        let windowSpaces = CGSSpaceService.spaces(forWindow: windowID)
+        // Unknown membership (e.g. API unavailable) — don't block focusing.
+        guard !windowSpaces.isEmpty else { return true }
+        let displays = CGSSpaceService.displays()
+        // Prefer the display under the cursor: the window must be on the space
+        // that display is showing.
+        if let monitor = Monitors.ordered().first(where: { $0.bounds.contains(point) }),
+           let display = displays.first(where: { $0.identifier.caseInsensitiveCompare(monitor.uuid) == .orderedSame }) {
+            return windowSpaces.contains(display.currentSpace)
+        }
+        let visible = Set(displays.map(\.currentSpace))
+        return windowSpaces.contains { visible.contains($0) }
+    }
 
     private struct WindowInfo {
         let pid: pid_t
@@ -145,6 +224,21 @@ final class FocusFollowsMouse: @unchecked Sendable {
 
             let ownerName = info[kCGWindowOwnerName] as? String
 
+            let bounds = CGRect(
+                x: boundsDict["X"] ?? 0,
+                y: boundsDict["Y"] ?? 0,
+                width: boundsDict["Width"] ?? 0,
+                height: boundsDict["Height"] ?? 0
+            )
+
+            // A menu, popover or panel above normal windows is under the
+            // cursor — focusing the window beneath it would close it.
+            if layer > Self.minimumWindowLayer, layer < Self.overlayLayerLimit,
+               bounds.contains(point), ownerName.map({ !Self.ignoredWindowOwners.contains($0) }) ?? true {
+                Log.debug("FFM/windowLookup: overlay \(ownerName ?? "?") layer=\(layer) under cursor, skipping")
+                return nil
+            }
+
             guard layer == Self.minimumWindowLayer else { continue }
 
             if pid == Self.ownPID {
@@ -154,13 +248,6 @@ final class FocusFollowsMouse: @unchecked Sendable {
             if let ownerName, Self.ignoredWindowOwners.contains(ownerName) {
                 continue
             }
-
-            let bounds = CGRect(
-                x: boundsDict["X"] ?? 0,
-                y: boundsDict["Y"] ?? 0,
-                width: boundsDict["Width"] ?? 0,
-                height: boundsDict["Height"] ?? 0
-            )
 
             if bounds.contains(point) {
                 Log.debug("FFM/windowLookup: hit \(ownerName ?? "?") pid=\(pid) wid=\(windowID) bounds=\(bounds)")
