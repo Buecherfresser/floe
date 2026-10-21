@@ -1,36 +1,36 @@
 # Configuring Floe
 
-You set Floe up in Settings: click the Floe icon in the menu bar and choose Settings. Changes apply right away. Floe saves everything to `~/.config/floe/config.yaml`, so you can edit that file instead if you prefer, and it's where you add hotkeys.
+You set Floe up in Settings: click the Floe icon in the menu bar and choose Settings. Changes apply right away. Floe saves everything to `~/.config/floe/config.yaml`, so you can edit that file instead if you prefer.
+
+Out of the box, Floe tiles your windows, ⌃1–9 switches desktops and ⌃⇧1–9 sends the focused window to that desktop. Focus follows mouse, the app switcher and desktop layouts start off.
 
 ## Settings
 
-### Focus follows mouse
+### General
 
-Turn it on or off, set how long the cursor rests on a window before that window gets focus, and list apps that never get focus this way.
+Floe shows whether it has Accessibility access and opens at login, which you can turn off here. Under "Checks" it lists anything on your Mac that gets in its way, such as another window manager like yabai or skhd still running, "Displays have separate Spaces" being off, or macOS edge tiling being on, each with what to do about it. The same warnings appear in the menu bar menu.
+
+This tab also has focus follows mouse (on or off, how long the cursor rests on a window before it gets focus, and apps that never get focus this way), debug logging and the version number.
+
+### Tiling
+
+Turn tiling on, then set the gap between windows and the gap at the screen edge. With "Give every window the same space" on, every window on a display gets the same share. With it off, the first window takes the share you set and each further window splits what's left. Under "Apps that always float" you add apps that Floe leaves alone. Fixed-size windows like System Settings float on their own.
 
 ### Hotkeys
 
-Turn hotkeys on or off and see the ones you have. To add or change a hotkey, edit the [config file](#hotkeys-in-the-config-file).
+Each shortcut has a key combination and an action. Click the combination and press the keys you want (Esc cancels), then pick the action from the list, and the desktop number if the action needs one. "Add Shortcut" adds a row and starts recording right away. A warning sign marks combinations used twice.
 
 ### App switcher
 
 Turn on "Use fn as app switcher" to jump to an app with fn+key and pull its window onto your desktop with fn+shift+key. Floe also sets "Press 🌐 key to" in System Settings > Keyboard to "Do Nothing", because otherwise that action fires after every fn shortcut. Turning the switcher off restores your previous choice.
 
-The list starts with shortcuts for Spotify, Safari, Chrome, Claude, Terminal, Finder, Discord, Outlook, Teams, Cursor, Obsidian, Postman and Slack. To add an app, type a key into "Key", then pick a running app from "Add App…" or choose one from your Applications folder.
+The list starts with shortcuts for Spotify, Safari, Chrome, Claude, Terminal, Finder, Discord, Outlook, Teams, Cursor, Obsidian, Postman and Slack. To add an app, type a key, then pick a running app from "Add App…" or choose one from your Applications folder.
 
-### Tiling
+### Desktops
 
-Turn tiling on, then set the gap between windows and the gap at the screen edge. With "Auto-balance" on, every window on a display gets the same space. With it off, the first window takes the split ratio share of the screen and each further window splits what's left. Under app rules you add apps by name and choose whether they're tiled or always float.
-
-### Desktop layouts
-
-Turn on "Manage desktops per monitor setup" and set how many desktops each monitor gets, for one, two and three monitors. Monitor 1 is your main display, the others follow from left to right, and Settings shows which desktop numbers each monitor ends up with. When monitors come and go, Floe adds or removes desktops to match and moves every window back to its desktop number. It opens Mission Control for a moment to do that, so you see it flash. "Apply Now" applies the layout for the monitors connected right now.
+Turn on "Keep desktop numbers per monitor setup" and set how many desktops each monitor gets, for one, two and three monitors. Monitor 1 is your main display, the others follow from left to right, and Settings shows which desktop numbers each monitor ends up with. When monitors come and go, Floe adds or removes desktops to match and moves every window back to its desktop number. It opens Mission Control for a moment to do that, so you see it flash. "Apply Now" applies the layout for the monitors connected right now.
 
 With several monitors this needs "Displays have separate Spaces" turned on in System Settings > Desktop & Dock.
-
-### Advanced
-
-"Debug logging" writes detailed messages, see [Troubleshooting](#troubleshooting).
 
 ## Config file
 
@@ -96,7 +96,7 @@ Layouts for more than three monitors go into `desktopLayouts.layouts` the same w
 
 ### Hotkeys in the config file
 
-Each entry under `hotkeys.bindings` pairs a key combination with an action. The app switcher creates its fn bindings for you, so you only add those by hand for extra combinations.
+Each entry under `hotkeys.bindings` pairs a key combination with an action, the same as a row in the Hotkeys tab. The app switcher creates its fn bindings for you, so you only add those by hand for extra combinations.
 
 | Action | What it does |
 |---|---|

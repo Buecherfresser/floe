@@ -27,11 +27,11 @@ git clone https://github.com/Buecherfresser/floe.git && cd floe
 cp -R dist/Floe.app /Applications/ && open /Applications/Floe.app
 ```
 
-Floe asks for Accessibility access on first launch.
+Floe asks for Accessibility access on first launch and opens at login from then on.
 
 ## Configure
 
-Open Settings from the Floe icon in the menu bar, which covers everything except adding hotkeys. Floe saves your settings to `~/.config/floe/config.yaml`, where you add hotkeys and can change anything else too. [docs/configuration.md](docs/configuration.md) walks through both.
+Out of the box, Floe tiles your windows, ⌃1–9 switches desktops and ⌃⇧1–9 sends the focused window there. Everything else, including your own hotkeys, is in Settings: click the Floe icon in the menu bar. Floe saves your settings to `~/.config/floe/config.yaml` if you'd rather edit a file. [docs/configuration.md](docs/configuration.md) walks through both.
 
 ## License
 
