@@ -6,8 +6,9 @@ final class EventTapService: @unchecked Sendable {
     typealias MouseMovedHandler = @Sendable (CGPoint) -> Void
 
     fileprivate let handler: MouseMovedHandler
-    fileprivate var eventTap: CFMachPort?
+    private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
+    private var tapRunLoop: CFRunLoop?
     private var tapThread: Thread?
     private let lock = NSLock()
 
@@ -39,15 +40,26 @@ final class EventTapService: @unchecked Sendable {
 
         if let tap = eventTap {
             CGEvent.tapEnable(tap: tap, enable: false)
+            CFMachPortInvalidate(tap)
         }
         if let source = runLoopSource {
             CFRunLoopSourceInvalidate(source)
         }
+        if let runLoop = tapRunLoop {
+            CFRunLoopStop(runLoop)
+        }
         tapThread?.cancel()
         eventTap = nil
         runLoopSource = nil
+        tapRunLoop = nil
         tapThread = nil
         isRunning = false
+    }
+
+    fileprivate func reenable() {
+        lock.withLock {
+            if let eventTap { CGEvent.tapEnable(tap: eventTap, enable: true) }
+        }
     }
 
     private func runEventTap() {
@@ -68,11 +80,22 @@ final class EventTapService: @unchecked Sendable {
         }
 
         let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+
+        // stop() may have run before the tap existed.
+        let stillRunning = lock.withLock { () -> Bool in
+            guard isRunning else { return false }
+            self.eventTap = tap
+            self.runLoopSource = source
+            self.tapRunLoop = CFRunLoopGetCurrent()
+            return true
+        }
+        guard stillRunning else {
+            CFMachPortInvalidate(tap)
+            return
+        }
+
         CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
-
-        self.eventTap = tap
-        self.runLoopSource = source
 
         Log.info("EventTap: created and running on thread \(Thread.current.name ?? "?")")
         CFRunLoopRun()
@@ -93,9 +116,7 @@ private func eventTapCallback(
 
     if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
         Log.info("EventTap: tap was disabled (type=\(type.rawValue)), re-enabling")
-        if let tap = service.eventTap {
-            CGEvent.tapEnable(tap: tap, enable: true)
-        }
+        service.reenable()
         return Unmanaged.passRetained(event)
     }
 

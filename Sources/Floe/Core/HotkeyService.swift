@@ -74,6 +74,7 @@ final class HotkeyService: @unchecked Sendable {
 
         if let tap = eventTap {
             CGEvent.tapEnable(tap: tap, enable: false)
+            CFMachPortInvalidate(tap)
         }
         if let source = runLoopSource {
             CFRunLoopSourceInvalidate(source)
@@ -112,12 +113,23 @@ final class HotkeyService: @unchecked Sendable {
 
         let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         let runLoop = CFRunLoopGetCurrent()!
+
+        // stop() may have run before the tap existed — then don't leave a tap
+        // behind that nobody can stop.
+        let stillRunning = lock.withLock { () -> Bool in
+            guard isRunning else { return false }
+            self.eventTap = tap
+            self.runLoopSource = source
+            self.tapRunLoop = runLoop
+            return true
+        }
+        guard stillRunning else {
+            CFMachPortInvalidate(tap)
+            return
+        }
+
         CFRunLoopAddSource(runLoop, source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
-
-        self.eventTap = tap
-        self.runLoopSource = source
-        self.tapRunLoop = runLoop
 
         Log.info("Hotkeys: event tap created and running")
         CFRunLoopRun()
@@ -128,7 +140,7 @@ final class HotkeyService: @unchecked Sendable {
     fileprivate func handleEvent(type: CGEventType, event: CGEvent) -> CGEvent? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             Log.info("Hotkeys: tap was disabled (type=\(type.rawValue)), re-enabling")
-            if let tap = eventTap {
+            if let tap = lock.withLock({ eventTap }) {
                 CGEvent.tapEnable(tap: tap, enable: true)
             }
             return event
