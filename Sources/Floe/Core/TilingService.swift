@@ -87,6 +87,18 @@ final class TilingService: @unchecked Sendable {
     private var holdFights: [CGWindowID: Int] = [:]
     /// Frame each window had just before Floe last changed it.
     private var previousFrames: [CGWindowID: CGRect] = [:]
+    /// Windows that took a tile at least once. Only windows that never did
+    /// can be "held" — an app adjusting its size now and then (Terminal
+    /// snapping to its character grid, a zoom) isn't something holding it.
+    private var acceptedTile: Set<CGWindowID> = []
+    /// Smallest size each window has been seen to accept (larger than a tile
+    /// it refused). The layout widens such windows' tiles instead of
+    /// floating them.
+    private var minSizes: [CGWindowID: CGSize] = [:]
+    /// Last tile requested per window and the frame the window settled at.
+    /// Apps that round sizes (Terminal's character grid) settle a few points
+    /// off; asking again on every retile only makes them redraw.
+    private var settledFrames: [CGWindowID: (target: CGRect, actual: CGRect)] = [:]
 
     private static let snapBackLimit = 4
     private static let snapBackWindow: DispatchTimeInterval = .seconds(8)
@@ -321,6 +333,15 @@ final class TilingService: @unchecked Sendable {
         Log.debug("Tiling: AX notification=\(notification)")
         if notification == kAXWindowMovedNotification || notification == kAXWindowResizedNotification {
             retileQueue.async { [weak self] in self?.handleFrameChange(of: element) }
+        } else if notification == kAXWindowCreatedNotification {
+            // A new window often isn't in the window list (or has no final
+            // frame) yet when this arrives — look again shortly after.
+            scheduleRetile()
+            for delay in [300, 1000] {
+                retileQueue.asyncAfter(deadline: .now() + .milliseconds(delay)) { [weak self] in
+                    self?.scheduleRetile()
+                }
+            }
         } else {
             scheduleRetile()
         }
@@ -387,6 +408,21 @@ final class TilingService: @unchecked Sendable {
                 kAXWindowMovedNotification, kAXWindowResizedNotification,
             ] {
                 AXObserverAddNotification(observer, tw.element, notification as CFString, selfPtr)
+            }
+        }
+
+        // A window still close to the tile we gave it a while ago took it.
+        // (Right after setting, even a window something else holds shows our
+        // frame — it only jumps back a moment later.)
+        let settled = DispatchTime.now()
+        for tw in tileableWindows where !acceptedTile.contains(tw.windowID) {
+            guard let applied = appliedFrames[tw.windowID],
+                  settled >= applied.time + Self.refusalRecheckDelay else { continue }
+            if abs(tw.bounds.width - applied.frame.width) <= Self.sizeRefusalTolerance,
+               abs(tw.bounds.height - applied.frame.height) <= Self.sizeRefusalTolerance,
+               abs(tw.bounds.minX - applied.frame.minX) <= Self.sizeRefusalTolerance,
+               abs(tw.bounds.minY - applied.frame.minY) <= Self.sizeRefusalTolerance {
+                acceptedTile.insert(tw.windowID)
             }
         }
 
@@ -493,11 +529,21 @@ final class TilingService: @unchecked Sendable {
         for (windowID, frame) in frames {
             screenKeyForWindow[windowID] = key
             guard !skipped.contains(windowID), let element = elements[windowID] else { continue }
+
+            if let settled = settledFrames[windowID], settled.target.isApproximately(frame),
+               let current = accessibilityService.windowFrame(of: element), current.isApproximately(settled.actual) {
+                applied.append((windowID, frame))
+                continue
+            }
+
             Log.debug("Tiling: setting wid=\(windowID) frame=\(frame)")
             appliedFrames[windowID] = (frame, .now())
             if let before = accessibilityService.setWindowFrame(element: element, frame: frame),
                !before.isApproximately(frame) {
                 previousFrames[windowID] = before
+            }
+            if let after = accessibilityService.windowFrame(of: element) {
+                settledFrames[windowID] = (frame, after)
             }
             // Stamp again: the moved/resized notifications for our own change
             // arrive after this call returns.
@@ -613,6 +659,8 @@ final class TilingService: @unchecked Sendable {
         heldElements[windowID] = nil
         holdFights[windowID] = nil
         previousFrames[windowID] = nil
+        acceptedTile.remove(windowID)
+        settledFrames[windowID] = nil
         lock.withLock { _ = floatingWindowIDs.remove(windowID) }
         scheduleRetile()
     }
