@@ -33,6 +33,13 @@ cp Assets/AppIcon-64.png "$ICONSET/icon_32x32@2x.png"
 iconutil -c icns "$ICONSET" -o "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 rm -rf "$(dirname "$ICONSET")"
 
+# The bear's welcome animations. Without them the welcome shows a stand-in bear.
+if compgen -G "Assets/Bear/*.mov" >/dev/null; then
+    echo "==> Adding the bear's animations..."
+    mkdir -p "$APP_BUNDLE/Contents/Resources/Bear"
+    cp Assets/Bear/*.mov "$APP_BUNDLE/Contents/Resources/Bear/"
+fi
+
 cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
