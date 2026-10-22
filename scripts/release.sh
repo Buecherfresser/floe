@@ -8,7 +8,9 @@ set -euo pipefail
 #   scripts/release.sh 0.2.0
 #
 # Set FLOE_TAP_DIR to a checkout of Buecherfresser/homebrew-floe to also
-# commit and push the updated formula there.
+# commit and push the updated formula there. The release notes list the
+# feat and fix commits since the last release; set NOTES_FILE to use your
+# own, or EDITOR to edit the generated ones first.
 
 VERSION="${1:?usage: release.sh <version, e.g. 0.2.0>}"
 VERSION="${VERSION#v}"
@@ -42,12 +44,40 @@ ditto dist/Floe.app "$STAGING/Floe.app"
 ln -s /Applications "$STAGING/Applications"
 hdiutil create -volname "Floe" -srcfolder "$STAGING" -ov -format UDZO "$DMG" >/dev/null
 
+# Release notes from the commit messages: feat → New, fix → Fixes.
+PREVIOUS="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+NOTES="$STAGING/notes.md"
+section() {
+    local entries
+    entries="$(git log --reverse --pretty=%s "${PREVIOUS:+$PREVIOUS..}HEAD" \
+        | sed -nE "s/^$1(\([^)]*\))?!?: (.*)/\2/p" \
+        | awk '{ print "- " toupper(substr($0, 1, 1)) substr($0, 2) }')"
+    if [[ -n "$entries" ]]; then printf '### %s\n\n%s\n\n' "$2" "$entries"; fi
+}
+if [[ -n "${NOTES_FILE:-}" ]]; then
+    cp "$NOTES_FILE" "$NOTES"
+else
+    {
+        section feat New
+        section fix Fixes
+        if [[ -n "$PREVIOUS" ]]; then
+            echo "All changes: https://github.com/$REPO/compare/$PREVIOUS...$TAG"
+        fi
+    } > "$NOTES"
+    if [[ -t 0 && -n "${EDITOR:-}" ]]; then
+        "$EDITOR" "$NOTES"
+    fi
+fi
+echo ""
+cat "$NOTES"
+echo ""
+
 say "Tagging $TAG..."
 git tag -a "$TAG" -m "Floe $VERSION"
 git push origin "$TAG"
 
 say "Creating the GitHub release..."
-gh release create "$TAG" "$ZIP" "$DMG" --repo "$REPO" --title "Floe $VERSION" --generate-notes
+gh release create "$TAG" "$ZIP" "$DMG" --repo "$REPO" --title "Floe $VERSION" --notes-file "$NOTES"
 
 say "Updating the Homebrew formula..."
 SHA="$(curl -fsSL "https://github.com/$REPO/archive/refs/tags/$TAG.tar.gz" | shasum -a 256 | awk '{print $1}')"
