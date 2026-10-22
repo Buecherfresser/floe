@@ -19,15 +19,27 @@ https://github.com/user-attachments/assets/5d0ffbd8-4222-4b7d-9b62-0dad385cac75
 
 ## Install
 
-You need macOS 26 and Xcode 26.
+Floe needs macOS 26. Pick one of three ways; each one keeps Floe up to date by itself.
+
+**Install script.** Builds Floe on your Mac with Apple's Command Line Tools (the script offers to install them) and puts it into `/Applications`:
 
 ```bash
-git clone https://github.com/Buecherfresser/floe.git && cd floe
-./scripts/build-release.sh
-cp -R dist/Floe.app /Applications/ && open /Applications/Floe.app
+curl -fsSL https://raw.githubusercontent.com/Buecherfresser/floe/main/scripts/install.sh | bash
 ```
 
-Floe asks for Accessibility access on first launch and opens at login from then on.
+**Homebrew.** Builds Floe the same way, and `brew upgrade` covers it like everything else:
+
+```bash
+brew install buecherfresser/floe/floe
+ln -sfn "$(brew --prefix)/opt/floe/Floe.app" /Applications/Floe.app
+floe-sign "$(brew --prefix)/opt/floe/Floe.app"
+```
+
+**Download.** Get the DMG from the [latest release](https://github.com/Buecherfresser/floe/releases/latest) and drag Floe into Applications. Floe isn't notarized by Apple yet, so macOS blocks the first launch: open System Settings › Privacy & Security and click "Open Anyway" next to Floe.
+
+Floe asks for Accessibility access on first launch and opens at login from then on. The install script and `floe-sign` sign Floe with a certificate of your own, so macOS keeps that permission across updates. Setting the certificate up asks for your password once.
+
+To build from a checkout instead, run `./scripts/install.sh --source .`.
 
 ## Configure
 
