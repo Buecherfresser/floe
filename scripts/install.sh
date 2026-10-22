@@ -59,9 +59,9 @@ if [[ -n "$SOURCE" ]]; then
     VERSION="${VERSION:-0.0.0}"
 else
     if [[ -z "$VERSION" ]]; then
-        TAG="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
-            | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)"
-        [[ -n "$TAG" ]] || fail "Couldn't find a Floe release on GitHub."
+        TAG="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null \
+            | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1 || true)"
+        [[ -n "$TAG" ]] || fail "Couldn't find a Floe release on GitHub. Check https://github.com/$REPO/releases."
         VERSION="${TAG#v}"
     fi
     say "Downloading Floe $VERSION..."
