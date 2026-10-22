@@ -185,6 +185,10 @@ final class SpacesService: @unchecked Sendable {
     }
 
     private func postDockSwipes(count: Int, direction: Double) {
+        if DockSwipe.needsHIDEvent {
+            for _ in 0..<count { DockSwipe.post(forward: direction > 0) }
+            return
+        }
         guard let event = CGEvent(source: nil) else {
             Log.error("Spaces: failed to create dock swipe event")
             return

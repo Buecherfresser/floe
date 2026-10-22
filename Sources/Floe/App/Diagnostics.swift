@@ -89,6 +89,17 @@ enum Diagnostics {
             Thread.sleep(forTimeInterval: 0.8)
             let cursor = CGEvent(source: nil)?.location ?? .zero
             return "active=\(CGSSpaceService.currentSpaceID()) cursor=\(cursor) frontmost=\(NSWorkspace.shared.frontmostApplication?.localizedName ?? "?")\n" + spaces()
+        case "key-desktop":
+            // key-desktop <n> — presses Ctrl+N, macOS's own shortcut
+            guard command.count > 1, let keyCode = KeyCode.from(command[1]) else { return "usage: key-desktop <n>\n" }
+            for down in [true, false] {
+                let event = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: down)
+                event?.flags = .maskControl
+                event?.setIntegerValueField(.eventSourceUserData, value: kSyntheticEventTag)
+                event?.post(tap: .cgSessionEventTap)
+            }
+            Thread.sleep(forTimeInterval: 1.0)
+            return spaces()
         case "mouse-drag":
             // mouse-drag x1 y1 x2 y2 [ctrl] — press, drag in steps, release
             guard command.count > 4, let x1 = Double(command[1]), let y1 = Double(command[2]),
