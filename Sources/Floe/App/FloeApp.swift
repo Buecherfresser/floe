@@ -9,17 +9,17 @@ final class AppState: ObservableObject {
         accessibilityService: accessibilityService
     )
 
+    /// The welcome opens at launch until the user has gone through it, so
+    /// quitting halfway brings it back next time.
+    let showsWelcome = !OnboardingModel.isFinished
+
     init() {
+        if showsWelcome {
+            // A window manager should be there after every restart.
+            LoginItem.setEnabled(true)
+        }
         // Start right at launch, not only once the menu bar menu is opened.
         DispatchQueue.main.async { [weak self] in self?.startIfReady() }
-    }
-
-    var hasLaunchedBefore: Bool {
-        UserDefaults.standard.bool(forKey: "hasLaunchedBefore")
-    }
-
-    func markLaunched() {
-        UserDefaults.standard.set(true, forKey: "hasLaunchedBefore")
     }
 
     func startIfReady() {
@@ -29,10 +29,14 @@ final class AppState: ObservableObject {
     }
 }
 
+/// Floe's icon in the menu bar, which the welcome shows too.
+enum MenuBarIcon {
+    static let symbol = "macwindow.on.rectangle"
+}
+
 @main
 struct FloeApp: App {
     @StateObject private var appState = AppState()
-    @Environment(\.openWindow) private var openWindow
 
     init() {
         Diagnostics.runIfRequested()
@@ -43,17 +47,9 @@ struct FloeApp: App {
             MenuBarView()
                 .environmentObject(appState.core)
                 .environmentObject(appState.accessibilityService)
-                .task {
-                    if !appState.hasLaunchedBefore {
-                        openWindow(id: "onboarding")
-                        // A window manager should be there after every restart.
-                        LoginItem.setEnabled(true)
-                        appState.markLaunched()
-                    }
-                    appState.startIfReady()
-                }
+                .task { appState.startIfReady() }
         } label: {
-            Image(systemName: "macwindow.on.rectangle")
+            Image(systemName: MenuBarIcon.symbol)
         }
 
         Settings {
@@ -73,10 +69,17 @@ struct FloeApp: App {
         }
 
         Window("Welcome", id: "onboarding") {
-            OnboardingView()
-                .environmentObject(appState.accessibilityService)
-                .environmentObject(appState.core)
+            OnboardingView(
+                accessibility: appState.accessibilityService,
+                core: appState.core,
+                configManager: appState.configManager
+            )
         }
+        .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
+        // The menu bar menu's content only loads once it's clicked, so the
+        // welcome opens itself until it's finished.
+        .defaultLaunchBehavior(appState.showsWelcome ? .presented : .suppressed)
+        .restorationBehavior(.disabled)
     }
 }
