@@ -39,6 +39,11 @@ enum FrontProcess {
         )
     }()
 
+    static var isAvailable: Bool {
+        functions.setSpaceFrontPSN != nil && functions.setFrontProcess != nil
+            && functions.processForPID != nil && functions.connection != 0
+    }
+
     private static func psn(for pid: pid_t) -> ProcessSerialNumber? {
         var psn = ProcessSerialNumber()
         guard let lookup = functions.processForPID, lookup(pid, &psn) == noErr else { return nil }

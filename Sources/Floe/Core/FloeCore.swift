@@ -39,6 +39,7 @@ final class FloeCore: ObservableObject {
 
         // Updates don't need Accessibility, so they run from the first launch.
         Updater.shared.start()
+        Compatibility.checkAtLaunch()
     }
 
     func start() {

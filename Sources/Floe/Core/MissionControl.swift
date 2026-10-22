@@ -42,6 +42,7 @@ enum MissionControl {
         }
         guard session.waitUntil({ $0.root() != nil }, timeout: openTimeout) else {
             Log.error("MissionControl: did not open")
+            Compatibility.record(.missionControl, ok: false)
             return false
         }
 
@@ -66,8 +67,10 @@ enum MissionControl {
         func addDesktop(onDisplayContaining point: CGPoint) -> Bool {
             guard let add = findInDisplay(containing: point, identifier: "mc.spaces.add") else {
                 Log.error("MissionControl: no add-desktop button for display at \(point)")
+                Compatibility.record(.missionControl, ok: false)
                 return false
             }
+            Compatibility.record(.missionControl, ok: true)
             let result = AXUIElementPerformAction(add, kAXPressAction as CFString)
             usleep(settleDelay)
             Log.info("MissionControl: add desktop at \(point) -> \(result.rawValue)")
@@ -80,8 +83,10 @@ enum MissionControl {
         func removeDesktop(onDisplayContaining point: CGPoint, at index: Int) -> Bool {
             guard let list = findInDisplay(containing: point, identifier: "mc.spaces.list") else {
                 Log.error("MissionControl: no desktop list for display at \(point)")
+                Compatibility.record(.missionControl, ok: false)
                 return false
             }
+            Compatibility.record(.missionControl, ok: true)
             let buttons = children(of: list)
             guard buttons.indices.contains(index) else {
                 Log.error("MissionControl: no desktop at index \(index) (have \(buttons.count))")

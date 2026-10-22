@@ -276,12 +276,14 @@ enum CGSSpaceService {
         while Date() < deadline {
             if fns.spaces(forWindow: windowID).contains(spaceID) {
                 Log.info("CGS: moved window \(windowID) to space \(spaceID)")
+                Compatibility.record(.windowMove, ok: true)
                 return true
             }
             usleep(kMoveConfirmPollInterval)
         }
 
         Log.error("CGS: window \(windowID) did not arrive on space \(spaceID) (now on \(fns.spaces(forWindow: windowID)))")
+        Compatibility.record(.windowMove, ok: false)
         return false
     }
 
@@ -301,5 +303,36 @@ enum CGSSpaceService {
         let windowList = windows.map { NSNumber(value: $0) } as NSArray
         return initialize(allocated, NSSelectorFromString("initWithWindows:spaceID:"), windowList, spaceID)?
             .takeRetainedValue()
+    }
+}
+
+// MARK: - Compatibility
+
+extension CGSSpaceService {
+    /// Checks the SkyLight pieces Floe uses without moving anything.
+    static func probes() -> [Compatibility.Probe] {
+        let fns = CGSFunctions.shared
+        let spaces = userSpaceIDs()
+        let current = currentSpaceID()
+
+        // Any normal on-screen window should be on at least one desktop.
+        var windowSpaces = true
+        if let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[CFString: Any]],
+           let window = info.first(where: { ($0[kCGWindowLayer] as? Int) == 0 })?[kCGWindowNumber] as? CGWindowID {
+            windowSpaces = !fns.spaces(forWindow: window).isEmpty
+        }
+
+        let moveClass = NSClassFromString("SLSBridgedMoveWindowsToManagedSpaceOperation")
+        let canMove = fns.performBridgedOp != nil
+            && moveClass?.instancesRespond(to: NSSelectorFromString("initWithWindows:spaceID:")) == true
+
+        return [
+            Compatibility.Probe(name: "SkyLight", ok: fns.isLoaded),
+            Compatibility.Probe(name: "Desktop list", ok: !spaces.isEmpty),
+            // Not `spaces.contains`: a fullscreen app's space isn't a desktop.
+            Compatibility.Probe(name: "Current desktop", ok: current != 0),
+            Compatibility.Probe(name: "Window desktops", ok: windowSpaces),
+            Compatibility.Probe(name: "Window moves", ok: canMove),
+        ]
     }
 }

@@ -47,6 +47,7 @@ enum SystemCheck {
             ))
         }
 
+        issues += Compatibility.issues()
         return issues
     }
 

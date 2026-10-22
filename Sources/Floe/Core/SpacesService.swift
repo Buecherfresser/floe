@@ -174,11 +174,13 @@ final class SpacesService: @unchecked Sendable {
         postDockSwipes(count: abs(delta), direction: delta > 0 ? 1 : -1)
 
         if waitForCurrentSpace(target, on: display.identifier) {
+            Compatibility.record(.desktopSwitch, ok: true)
             if frontApp != nil || isOtherDisplay { takeKeyboardFocus(space: target) }
             return true
         }
 
         Log.info("Spaces: gesture switch to \(target) not observed, falling back to keyboard")
+        Compatibility.record(.desktopSwitch, ok: false)
         return focusViaKeyboard(space: target)
     }
 
