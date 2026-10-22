@@ -152,23 +152,34 @@ final class Updater: ObservableObject {
     func install(_ release: Release) {
         switch installMethod {
         case .homebrew(let brew):
-            state = .updating("Running brew upgrade…")
-            run(brew, ["upgrade", "floe"]) { [weak self] ok, output in
+            // `brew upgrade` only looks at the tap again when its own daily
+            // auto-update is due, so fetch the tap first.
+            state = .updating("Running brew update…")
+            run(brew, ["update", "--quiet"]) { [weak self] _, _ in
                 guard let self else { return }
-                guard ok else {
-                    self.state = .failed("brew upgrade failed: \(output.suffix(200))")
-                    return
-                }
-                // Homebrew builds an ad-hoc signed app. Signing it with the
-                // local certificate keeps the Accessibility permission.
-                let prefix = URL(fileURLWithPath: brew).deletingLastPathComponent().deletingLastPathComponent().path
-                let app = "\(prefix)/opt/floe/Floe.app"
-                self.state = .updating("Signing \(release.version)…")
-                // Only re-signs when signing is set up: setting it up asks
-                // for a password, which mustn't pop up out of nowhere.
-                self.run("\(prefix)/bin/floe-sign", ["--if-set-up", app]) { _, output in
-                    Log.info("Updater: floe-sign: \(output.suffix(300))")
-                    self.finish(release.version, launching: app)
+                self.state = .updating("Running brew upgrade…")
+                self.run(brew, ["upgrade", "floe"]) { ok, output in
+                    guard ok else {
+                        self.state = .failed("brew upgrade failed: \(output.suffix(200))")
+                        return
+                    }
+                    let prefix = URL(fileURLWithPath: brew).deletingLastPathComponent().deletingLastPathComponent().path
+                    let app = "\(prefix)/opt/floe/Floe.app"
+                    // Not Bundle(path:): it caches, and this may be Floe's own path.
+                    let installed = NSDictionary(contentsOfFile: "\(app)/Contents/Info.plist")?["CFBundleShortVersionString"] as? String
+                    guard installed == release.version else {
+                        self.state = .failed("Homebrew still has Floe \(installed ?? "?"). Run brew upgrade floe in Terminal.")
+                        return
+                    }
+                    // Homebrew builds an ad-hoc signed app. Signing it with the
+                    // local certificate keeps the Accessibility permission. It
+                    // only re-signs when signing is set up: setting it up asks
+                    // for a password, which mustn't pop up out of nowhere.
+                    self.state = .updating("Signing \(release.version)…")
+                    self.run("\(prefix)/bin/floe-sign", ["--if-set-up", app]) { _, output in
+                        Log.info("Updater: floe-sign: \(output.suffix(300))")
+                        self.finish(release.version, launching: app)
+                    }
                 }
             }
 
