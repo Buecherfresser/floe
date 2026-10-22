@@ -47,6 +47,10 @@ final class SpacesService: @unchecked Sendable {
 
     private let accessibilityService: AccessibilityService
 
+    /// Counts "go to desktop N" requests, newest last.
+    private let switchRequests = Locked(0)
+    private var latestSwitchRequest: Int { switchRequests.withLock { $0 } }
+
     /// Serializes space operations so rapid hotkey presses don't interleave.
     private let queue = DispatchQueue(label: "com.jonasdrechsel.floe.spaces", qos: .userInteractive)
 
@@ -82,7 +86,17 @@ final class SpacesService: @unchecked Sendable {
 
     /// Switches to "Desktop N" (1-based, counted across displays).
     func focusSpace(at index: Int) {
+        // Quick presses queue up behind a running switch. Only the latest
+        // target matters, so earlier ones that haven't run yet are dropped.
+        let request = switchRequests.withLock { value -> Int in
+            value += 1
+            return value
+        }
         queue.async { [self] in
+            guard request == latestSwitchRequest else {
+                Log.info("Spaces: skipping desktop \(index), a newer switch is waiting")
+                return
+            }
             guard let target = CGSSpaceService.spaceID(forIndex: index) else {
                 Log.error("Spaces: focusSpace — no desktop \(index)")
                 return
@@ -237,10 +251,13 @@ final class SpacesService: @unchecked Sendable {
     /// An empty desktop keeps the old focus: activating another app (Finder)
     /// would make macOS jump to wherever that app has a window.
     private func takeKeyboardFocus(space target: CGSSpaceID) {
+        let request = latestSwitchRequest
         let deadline = Date().addingTimeInterval(0.2)
         repeat {
             if focusFrontmostWindow(onSpace: target) { return }
             usleep(25_000)
+            // Another switch was asked for: stop waiting for this desktop.
+            if latestSwitchRequest != request { return }
         } while Date() < deadline
         Log.info("Spaces: no window to focus on space \(target)")
     }
@@ -641,5 +658,19 @@ final class SpacesService: @unchecked Sendable {
         event.flags = flags
         event.setIntegerValueField(.eventSourceUserData, value: kSyntheticEventTag)
         event.post(tap: .cghidEventTap)
+    }
+}
+
+/// A value guarded by a lock.
+final class Locked<Value>: @unchecked Sendable {
+    private var value: Value
+    private let lock = NSLock()
+
+    init(_ value: Value) {
+        self.value = value
+    }
+
+    func withLock<T>(_ body: (inout Value) -> T) -> T {
+        lock.withLock { body(&value) }
     }
 }
