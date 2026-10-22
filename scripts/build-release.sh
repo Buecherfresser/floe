@@ -8,7 +8,8 @@ BUILD_DIR="$(pwd)/.build/release"
 APP_BUNDLE="$(pwd)/dist/${APP_NAME}.app"
 
 echo "==> Building ${APP_NAME} ${VERSION} (release)..."
-swift build -c release
+# Homebrew builds in its own sandbox and passes --disable-sandbox here.
+swift build -c release ${SWIFT_BUILD_FLAGS:-}
 
 echo "==> Assembling ${APP_NAME}.app bundle..."
 rm -rf "$APP_BUNDLE"
