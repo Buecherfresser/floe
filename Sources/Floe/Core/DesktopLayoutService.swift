@@ -138,7 +138,7 @@ final class DesktopLayoutService: @unchecked Sendable {
         }
         didInitialRecord = true
 
-        let desktopForSpace = Self.desktopNumbers()
+        let desktopForSpace = desktopNumbers(monitors: monitorList)
         guard !desktopForSpace.isEmpty else { return }
 
         let windows = Self.managedWindowIDs()
@@ -296,12 +296,22 @@ final class DesktopLayoutService: @unchecked Sendable {
         monitors.allSatisfy { display(for: $0) != nil }
     }
 
-    /// Space → desktop number for the current displays (Floe's numbering).
-    private static func desktopNumbers() -> [CGSSpaceID: Int] {
-        Dictionary(
-            CGSSpaceService.userSpaceIDs().enumerated().map { ($1, $0 + 1) },
-            uniquingKeysWith: { first, _ in first }
-        )
+    /// Space → desktop number. With a layout, each monitor's desktops are
+    /// numbered from where its range starts, so an extra desktop on one
+    /// monitor doesn't shift the numbers on the next. Desktops beyond a
+    /// monitor's count get no number: they're about to be removed.
+    private func desktopNumbers(monitors: [Monitor]) -> [CGSSpaceID: Int] {
+        guard let layout = config.layout(forMonitorCount: monitors.count) else {
+            return Dictionary(
+                CGSSpaceService.userSpaceIDs().enumerated().map { ($1, $0 + 1) },
+                uniquingKeysWith: { first, _ in first }
+            )
+        }
+        var numbers: [CGSSpaceID: Int] = [:]
+        for (space, desktop) in targetSpaces(for: layout, monitors: monitors).map({ ($1, $0) }) {
+            numbers[space] = desktop
+        }
+        return numbers
     }
 
     private static func allWindowIDs() -> Set<CGWindowID> {
