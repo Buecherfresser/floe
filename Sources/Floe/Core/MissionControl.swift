@@ -33,7 +33,11 @@ enum MissionControl {
             Log.error("MissionControl: Dock not running")
             return false
         }
-        let session = Session(dock: AXUIElementCreateApplication(dock.processIdentifier))
+        let windowManager = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.WindowManager").first
+        let session = Session(
+            dock: AXUIElementCreateApplication(dock.processIdentifier),
+            windowManager: windowManager.map { AXUIElementCreateApplication($0.processIdentifier) }
+        )
         busyLock.withLock { busy = true }
         defer { busyLock.withLock { busy = false } }
 
@@ -56,9 +60,11 @@ enum MissionControl {
 
     final class Session {
         private let dock: AXUIElement
+        private let windowManager: AXUIElement?
 
-        fileprivate init(dock: AXUIElement) {
+        fileprivate init(dock: AXUIElement, windowManager: AXUIElement?) {
             self.dock = dock
+            self.windowManager = windowManager
         }
 
         /// Appends a desktop to the display whose Mission Control area
@@ -118,8 +124,20 @@ enum MissionControl {
             return nil
         }
 
+        /// The element holding one `mc.display` per display while Mission
+        /// Control is open. macOS 26 shows Mission Control in the Dock; macOS 27
+        /// shows it in WindowManager, with the same identifiers but without the
+        /// "mc" group, and leaves an empty "mc" group in the Dock.
         fileprivate func root() -> AXUIElement? {
-            children(of: dock).first { identifier(of: $0) == "mc" }
+            if let mc = children(of: dock).first(where: { identifier(of: $0) == "mc" }),
+               !children(of: mc).isEmpty {
+                return mc
+            }
+            if let windowManager,
+               children(of: windowManager).contains(where: { identifier(of: $0) == "mc.display" }) {
+                return windowManager
+            }
+            return nil
         }
 
         private func display(containing point: CGPoint) -> AXUIElement? {

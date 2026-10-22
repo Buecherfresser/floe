@@ -89,6 +89,67 @@ enum Diagnostics {
             Thread.sleep(forTimeInterval: 0.8)
             let cursor = CGEvent(source: nil)?.location ?? .zero
             return "active=\(CGSSpaceService.currentSpaceID()) cursor=\(cursor) frontmost=\(NSWorkspace.shared.frontmostApplication?.localizedName ?? "?")\n" + spaces()
+        case "mc-probe":
+            // mc-probe — opens Mission Control and samples its AX tree over 3 s
+            let missionControl = URL(fileURLWithPath: "/System/Applications/Mission Control.app")
+            NSWorkspace.shared.open(missionControl)
+            var out = ""
+            for wait in [0.3, 0.7, 1.0, 1.0] {
+                Thread.sleep(forTimeInterval: wait)
+                let tree = axTree(appName: "Dock", depth: 7)
+                let mc = tree.components(separatedBy: "\n").drop { !$0.contains("id=mc") }
+                out += "--- \(mc.count) lines\n" + mc.prefix(25).joined(separator: "\n") + "\n"
+            }
+            NSWorkspace.shared.open(missionControl)
+            Thread.sleep(forTimeInterval: 0.5)
+            return out
+        case "mc-attributes":
+            // mc-attributes — Mission Control's AX attributes, closed and open
+            func describeMC() -> String {
+                guard let dock = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first else { return "no Dock\n" }
+                let app = AXUIElementCreateApplication(dock.processIdentifier)
+                var ref: CFTypeRef?
+                AXUIElementCopyAttributeValue(app, kAXChildrenAttribute as CFString, &ref)
+                guard let mc = (ref as? [AXUIElement])?.first(where: {
+                    var id: CFTypeRef?
+                    AXUIElementCopyAttributeValue($0, kAXIdentifierAttribute as CFString, &id)
+                    return id as? String == "mc"
+                }) else { return "no mc element\n" }
+                var names: CFArray?
+                AXUIElementCopyAttributeNames(mc, &names)
+                var out = ""
+                for name in (names as? [String]) ?? [] {
+                    var value: CFTypeRef?
+                    let result = AXUIElementCopyAttributeValue(mc, name as CFString, &value)
+                    let text = value.map { String(describing: $0) }?.prefix(120) ?? "nil"
+                    out += "  \(name) [\(result.rawValue)] = \(text)\n"
+                }
+                return out
+            }
+            let missionControl = URL(fileURLWithPath: "/System/Applications/Mission Control.app")
+            var out = "closed:\n" + describeMC()
+            if let dock = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first {
+                let app = AXUIElementCreateApplication(dock.processIdentifier)
+                for flag in ["AXEnhancedUserInterface", "AXManualAccessibility"] {
+                    let result = AXUIElementSetAttributeValue(app, flag as CFString, kCFBooleanTrue)
+                    out += "set \(flag): \(result.rawValue)\n"
+                }
+            }
+            NSWorkspace.shared.open(missionControl)
+            Thread.sleep(forTimeInterval: 1.0)
+            out += "open:\n" + describeMC()
+            // Any other app showing Mission Control's desktops?
+            for app in NSWorkspace.shared.runningApplications where app.bundleIdentifier?.hasPrefix("com.apple.") == true {
+                let element = AXUIElementCreateApplication(app.processIdentifier)
+                var tree = ""
+                Self.dump(element, depth: 6, indent: 0, into: &tree)
+                if tree.contains("mc.") || tree.contains("Add Desktop") || tree.contains("Desktop 1") {
+                    out += "found in \(app.bundleIdentifier ?? "?"):\n" + tree.components(separatedBy: "\n").filter { $0.contains("mc") || $0.contains("Desktop") }.prefix(15).joined(separator: "\n") + "\n"
+                }
+            }
+            NSWorkspace.shared.open(missionControl)
+            Thread.sleep(forTimeInterval: 0.5)
+            return out
         case "key-desktop":
             // key-desktop <n> — presses Ctrl+N, macOS's own shortcut
             guard command.count > 1, let keyCode = KeyCode.from(command[1]) else { return "usage: key-desktop <n>\n" }
