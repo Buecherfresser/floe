@@ -3,6 +3,7 @@ import SwiftUI
 struct GeneralSettingsView: View {
     @EnvironmentObject private var configManager: ConfigManager
     @EnvironmentObject private var accessibilityService: AccessibilityService
+    @ObservedObject private var updater = Updater.shared
 
     @State private var openAtLogin = LoginItem.isEnabled
     @State private var loginNeedsApproval = LoginItem.needsApproval
@@ -97,9 +98,19 @@ struct GeneralSettingsView: View {
                 }
             }
 
+            Section("Updates") {
+                LabeledContent("Version", value: AppVersion.current)
+                updateStatus
+                if updater.installMethod != .development {
+                    Toggle("Install updates automatically", isOn: Binding(
+                        get: { updater.installsAutomatically },
+                        set: { updater.installsAutomatically = $0 }
+                    ))
+                }
+            }
+
             Section {
                 Toggle("Debug logging", isOn: configManager.binding(\.debug))
-                LabeledContent("Version", value: AppVersion.current)
             }
         }
         .formStyle(.grouped)
@@ -108,6 +119,45 @@ struct GeneralSettingsView: View {
             openAtLogin = LoginItem.isEnabled
             loginNeedsApproval = LoginItem.needsApproval
         }
+    }
+
+    @ViewBuilder
+    private var updateStatus: some View {
+        HStack {
+            switch updater.state {
+            case .idle:
+                Text("Installed via \(updater.installMethod.title)")
+                    .foregroundStyle(.secondary)
+            case .checking:
+                ProgressView().controlSize(.small)
+                Text("Checking for updates…")
+            case .upToDate:
+                Label("Floe is up to date", systemImage: "checkmark.circle")
+                    .foregroundStyle(.secondary)
+            case .available(let release):
+                Label("Floe \(release.version) is available", systemImage: "arrow.down.circle.fill")
+                    .foregroundStyle(.blue)
+                Link("What's new", destination: release.pageURL)
+                    .controlSize(.small)
+            case .updating(let message):
+                ProgressView().controlSize(.small)
+                Text(message)
+            case .failed(let message):
+                Label(message, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+            }
+            Spacer()
+            if case .available(let release) = updater.state, updater.installMethod != .development {
+                Button("Update") { updater.install(release) }
+            } else if updater.state != .checking, !isUpdating {
+                Button("Check Now") { updater.check() }
+            }
+        }
+    }
+
+    private var isUpdating: Bool {
+        if case .updating = updater.state { return true }
+        return false
     }
 
     private var delayBinding: Binding<Int> {

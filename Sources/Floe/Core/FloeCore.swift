@@ -36,6 +36,9 @@ final class FloeCore: ObservableObject {
                 self.applyConfig(config)
             }
             .store(in: &cancellables)
+
+        // Updates don't need Accessibility, so they run from the first launch.
+        Updater.shared.start()
     }
 
     func start() {
