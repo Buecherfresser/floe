@@ -40,6 +40,9 @@ if compgen -G "Assets/Bear/*.mov" >/dev/null; then
     cp Assets/Bear/*.mov "$APP_BUNDLE/Contents/Resources/Bear/"
 fi
 
+# Settings › General › Uninstall runs this copy.
+cp scripts/uninstall.sh "$APP_BUNDLE/Contents/Resources/uninstall.sh"
+
 cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"

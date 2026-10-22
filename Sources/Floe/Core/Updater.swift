@@ -9,7 +9,7 @@ import Foundation
 final class Updater: ObservableObject {
     static let shared = Updater()
 
-    static let repository = "Buecherfresser/floe"
+    nonisolated static let repository = "Buecherfresser/floe"
     static let installScriptURL = "https://raw.githubusercontent.com/\(repository)/main/scripts/install.sh"
 
     struct Release: Equatable {
@@ -290,14 +290,14 @@ final class Updater: ObservableObject {
     }
 
     /// Runs a shell command that outlives Floe.
-    private static func launchDetached(_ command: String) throws {
+    static func launchDetached(_ command: String) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
         process.arguments = ["-c", "nohup sh -c \(shellQuote(command)) >/dev/null 2>&1 &"]
         try process.run()
     }
 
-    private static func shellQuote(_ string: String) -> String {
+    static func shellQuote(_ string: String) -> String {
         "'" + string.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 

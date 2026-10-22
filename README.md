@@ -41,6 +41,12 @@ Floe asks for Accessibility access on first launch and opens at login from then 
 
 To build from a checkout instead, run `./scripts/install.sh --source .`.
 
+To uninstall, click Uninstall Floe in Settings › General, or run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Buecherfresser/floe/main/scripts/uninstall.sh | bash
+```
+
 ## Configure
 
 Out of the box, Floe tiles your windows, ⌃1–9 switches desktops and ⌃⇧1–9 sends the focused window there. Everything else, including your own hotkeys, is in Settings: click the Floe icon in the menu bar. Floe saves your settings to `~/.config/floe/config.yaml` if you'd rather edit a file. [docs/configuration.md](docs/configuration.md) walks through both.
