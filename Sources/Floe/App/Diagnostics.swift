@@ -129,6 +129,9 @@ enum Diagnostics {
                 Thread.sleep(forTimeInterval: 0.1)
             }
             return out
+        case "report":
+            // report — what Copy Diagnostics in Settings puts on the clipboard
+            return MainActor.assumeIsolated { DiagnosticReport.summary() } + "\n" + DiagnosticReport.recentLog()
         case "render-settings":
             // render-settings <directory> — one PNG per Settings tab
             guard command.count > 1 else { return "usage: render-settings <dir>\n" }

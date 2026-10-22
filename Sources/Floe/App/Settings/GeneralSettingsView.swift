@@ -9,6 +9,10 @@ struct GeneralSettingsView: View {
     @State private var loginNeedsApproval = LoginItem.needsApproval
     @State private var issues: [SystemIssue] = []
     @State private var newIgnoredApp = ""
+    @State private var diagnostics: DiagnosticsState = .idle
+    @State private var confirmsUninstall = false
+
+    private enum DiagnosticsState { case idle, collecting, copied }
 
     var body: some View {
         Form {
@@ -109,8 +113,38 @@ struct GeneralSettingsView: View {
                 }
             }
 
-            Section {
+            Section("Troubleshooting") {
                 Toggle("Debug logging", isOn: configManager.binding(\.debug))
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Button("Copy Diagnostics") { copyDiagnostics() }
+                        Button("Report a Problem…") {
+                            copyDiagnostics { NSWorkspace.shared.open(DiagnosticReport.issuesURL) }
+                        }
+                        Spacer()
+                        switch diagnostics {
+                        case .idle: EmptyView()
+                        case .collecting: ProgressView().controlSize(.small)
+                        case .copied: Label("Copied", systemImage: "checkmark").foregroundStyle(.secondary)
+                        }
+                    }
+                    .disabled(diagnostics == .collecting)
+                    Text("Copies versions, the checks, your settings and the last 30 minutes of Floe's log, which names apps and windows. Paste it into a bug report.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if Uninstaller.isAvailable {
+                Section {
+                    Button("Uninstall Floe…", role: .destructive) { confirmsUninstall = true }
+                        .confirmationDialog("Uninstall Floe?", isPresented: $confirmsUninstall) {
+                            Button("Uninstall", role: .destructive) { Uninstaller.uninstall(keepSettings: false) }
+                            Button("Uninstall but Keep Settings") { Uninstaller.uninstall(keepSettings: true) }
+                        } message: {
+                            Text("Floe quits and removes itself, its settings and its Accessibility permission.")
+                        }
+                }
             }
         }
         .formStyle(.grouped)
@@ -158,6 +192,17 @@ struct GeneralSettingsView: View {
     private var isUpdating: Bool {
         if case .updating = updater.state { return true }
         return false
+    }
+
+    private func copyDiagnostics(then done: @escaping () -> Void = {}) {
+        diagnostics = .collecting
+        Task {
+            let report = await DiagnosticReport.make()
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(report, forType: .string)
+            diagnostics = .copied
+            done()
+        }
     }
 
     private var delayBinding: Binding<Int> {
