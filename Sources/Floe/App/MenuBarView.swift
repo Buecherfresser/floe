@@ -3,6 +3,7 @@ import SwiftUI
 struct MenuBarView: View {
     @EnvironmentObject private var core: FloeCore
     @EnvironmentObject private var accessibilityService: AccessibilityService
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(spacing: 0) {
@@ -15,6 +16,9 @@ struct MenuBarView: View {
             Divider()
             toggleButton
             Divider()
+            Button("Show Welcome...") {
+                openWindow(id: "onboarding")
+            }
             SettingsLink {
                 Text("Settings...")
             }
