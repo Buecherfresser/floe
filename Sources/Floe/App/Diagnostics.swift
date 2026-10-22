@@ -133,6 +133,10 @@ enum Diagnostics {
             // render-settings <directory> — one PNG per Settings tab
             guard command.count > 1 else { return "usage: render-settings <dir>\n" }
             return MainActor.assumeIsolated { renderSettings(into: command[1]) }
+        case "render-onboarding":
+            // render-onboarding <directory> — one PNG per welcome step
+            guard command.count > 1 else { return "usage: render-onboarding <dir>\n" }
+            return MainActor.assumeIsolated { renderOnboarding(into: command[1]) }
         case "close":
             // close <app name> — presses the close button of the app's standard windows
             guard command.count > 1,
@@ -299,19 +303,59 @@ enum Diagnostics {
                 .environmentObject(accessibility)
                 .environmentObject(core)
                 .frame(width: 600, height: 560)
-            let hosting = NSHostingView(rootView: root)
-            hosting.frame = NSRect(x: 0, y: 0, width: 600, height: 560)
-            let window = NSWindow(contentRect: hosting.frame, styleMask: [.titled], backing: .buffered, defer: false)
-            window.contentView = hosting
-            hosting.layoutSubtreeIfNeeded()
-            RunLoop.current.run(until: Date().addingTimeInterval(0.4))
-            guard let rep = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else { continue }
-            hosting.cacheDisplay(in: hosting.bounds, to: rep)
-            let path = "\(directory)/\(name).png"
-            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
-            out += "\(path)\n"
+            out += snapshot(root, size: NSSize(width: 600, height: 560), to: "\(directory)/\(name).png")
         }
         return out
+    }
+
+    @MainActor
+    private static func renderOnboarding(into directory: String) -> String {
+        let configManager = ConfigManager()
+        let accessibility = AccessibilityService()
+        let core = FloeCore(configManager: configManager, accessibilityService: accessibility)
+        let states: [(String, (OnboardingModel) -> Void)] = [
+            ("1-welcome", { $0.preview(.welcome, bear: .wave) }),
+            ("2-accessibility", { $0.preview(.accessibility, bear: .point) }),
+            ("3-accessibility-waiting", { $0.preview(.accessibility, bear: .wait, waiting: true) }),
+            ("4-accessibility-granted", { $0.preview(.accessibility, bear: .cheer, granted: true) }),
+            ("5-checks", { $0.preview(.checks, bear: .oops, issues: [SystemIssue(
+                id: "conflict-Rectangle", title: "Rectangle is running",
+                detail: "It moves windows and handles hotkeys too, so the two fight over every window. Quit Rectangle and remove it from your login items.",
+                settingsURL: nil
+            ), SystemIssue(
+                id: "edge-tiling", title: "macOS window tiling is on",
+                detail: "Dragging a window to a screen edge makes macOS tile it. Turn off \"Drag windows to screen edges to tile\" in Desktop & Dock.",
+                settingsURL: URL(string: "x-apple.systempreferences:com.apple.Desktop-Settings.extension")
+            )]) }),
+            ("5b-desktops", { $0.preview(.desktops, bear: .point) }),
+            ("5c-desktops-working", { $0.preview(.desktops, bear: .wait, desktopSetup: .working) }),
+            ("6-practice", { $0.preview(.practice, bear: .point) }),
+            ("7-practice-back", { $0.preview(.practice, bear: .cheer, practice: .comeBack) }),
+            ("8-apps", { $0.preview(.apps, bear: .point) }),
+            ("9-apps-pull", { $0.preview(.apps, bear: .cheer, appSwitch: .pull) }),
+            ("9z-done", { $0.preview(.done, bear: .cheer) }),
+        ]
+        var out = ""
+        for (name, apply) in states {
+            let model = OnboardingModel(accessibility: accessibility, core: core, configManager: configManager)
+            apply(model)
+            out += snapshot(OnboardingView(model: model), size: NSSize(width: 520, height: 700), to: "\(directory)/\(name).png")
+        }
+        return out
+    }
+
+    @MainActor
+    private static func snapshot(_ view: some View, size: NSSize, to path: String) -> String {
+        let hosting = NSHostingView(rootView: view)
+        hosting.frame = NSRect(origin: .zero, size: size)
+        let window = NSWindow(contentRect: hosting.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = hosting
+        hosting.layoutSubtreeIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.6))
+        guard let rep = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else { return "" }
+        hosting.cacheDisplay(in: hosting.bounds, to: rep)
+        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+        return "\(path)\n"
     }
 
     // MARK: - AX Helpers
