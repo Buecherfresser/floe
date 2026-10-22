@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Security
 
 /// Checks GitHub for a newer release and installs it the same way Floe was
 /// installed: Homebrew upgrades the formula, the install script builds the
@@ -24,6 +25,8 @@ final class Updater: ObservableObject {
         case upToDate
         case available(Release)
         case updating(String)
+        /// Installed; Floe restarts into it unless `relaunches` is off.
+        case installed(String)
         case failed(String)
     }
 
@@ -50,6 +53,11 @@ final class Updater: ObservableObject {
     private static let automaticKey = "installUpdatesAutomatically"
     private static let checkInterval: TimeInterval = 24 * 60 * 60
     private var timer: Timer?
+    private var statusTimer: Timer?
+
+    /// Off for the diagnostics `update` command, which checks the result
+    /// itself instead of restarting into it.
+    var relaunches = true
 
     private init() {}
 
@@ -69,14 +77,19 @@ final class Updater: ObservableObject {
     func start() {
         guard installMethod != .development, timer == nil else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
-            self?.check(installIfAvailable: true)
+            guard let self else { return }
+            self.check(install: self.installsAutomatically)
         }
         timer = Timer.scheduledTimer(withTimeInterval: Self.checkInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.check(installIfAvailable: true) }
+            Task { @MainActor in
+                guard let self else { return }
+                self.check(install: self.installsAutomatically)
+            }
         }
     }
 
-    func check(installIfAvailable: Bool = false) {
+    /// Looks for a newer release and, with `install`, installs it right away.
+    func check(install: Bool = false) {
         if case .updating = state { return }
         state = .checking
         Task {
@@ -85,8 +98,8 @@ final class Updater: ObservableObject {
                 if Self.isVersion(release.version, newerThan: currentVersion) {
                     Log.info("Updater: \(release.version) is available (running \(currentVersion))")
                     state = .available(release)
-                    if installIfAvailable && installsAutomatically && installMethod != .development {
-                        install(release)
+                    if install && installMethod != .development {
+                        self.install(release)
                     }
                 } else {
                     state = .upToDate
@@ -151,29 +164,36 @@ final class Updater: ObservableObject {
                 let prefix = URL(fileURLWithPath: brew).deletingLastPathComponent().deletingLastPathComponent().path
                 let app = "\(prefix)/opt/floe/Floe.app"
                 self.state = .updating("Signing \(release.version)…")
-                self.run("\(prefix)/bin/floe-sign", [app]) { _, output in
+                // Only re-signs when signing is set up: setting it up asks
+                // for a password, which mustn't pop up out of nowhere.
+                self.run("\(prefix)/bin/floe-sign", ["--if-set-up", app]) { _, output in
                     Log.info("Updater: floe-sign: \(output.suffix(300))")
-                    Self.relaunch(app)
+                    self.finish(release.version, launching: app)
                 }
             }
 
         case .script:
             // The script builds the new version, then quits and reopens Floe.
-            // It runs on its own so it keeps going once Floe has quit.
+            // It runs on its own so it keeps going once Floe has quit, and
+            // leaves its exit status behind for Floe to pick up if it fails.
             state = .updating("Building \(release.version)… Floe restarts when it's done.")
             let log = Self.updateLogURL
-            let command = "mkdir -p \(shellQuote(log.deletingLastPathComponent().path)); "
-                + "curl -fsSL \(Self.installScriptURL) | bash -s -- --update > \(shellQuote(log.path)) 2>&1"
+            let status = log.deletingPathExtension().appendingPathExtension("status")
+            let script = log.deletingPathExtension().appendingPathExtension("sh")
+            try? FileManager.default.removeItem(at: status)
+            let appDir = Bundle.main.bundleURL.deletingLastPathComponent().path
+            let launch = relaunches ? "" : " --no-launch"
+            let command = "mkdir -p \(shellQuote(log.deletingLastPathComponent().path)) && "
+                + "curl -fsSL \(Self.installScriptURL) -o \(shellQuote(script.path)) && "
+                + "/bin/bash \(shellQuote(script.path)) --update --app-dir \(shellQuote(appDir))\(launch) > \(shellQuote(log.path)) 2>&1; "
+                + "echo $? > \(shellQuote(status.path))"
             do {
                 try Self.launchDetached(command)
             } catch {
                 state = .failed("Couldn't start the install script: \(error.localizedDescription)")
                 return
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 10 * 60) { [weak self] in
-                guard let self, case .updating = self.state else { return }
-                self.state = .failed("The update didn't finish. Details are in \(log.path).")
-            }
+            watchScript(status: status, log: log, version: release.version)
 
         case .download:
             guard let zipURL = release.zipURL else {
@@ -185,6 +205,32 @@ final class Updater: ObservableObject {
 
         case .development:
             break
+        }
+    }
+
+    /// Picks up the install script's exit status. On success the script has
+    /// usually quit Floe already.
+    private func watchScript(status: URL, log: URL, version: String) {
+        let started = Date()
+        statusTimer?.invalidate()
+        statusTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.pollScript(status: status, log: log, version: version, started: started) }
+        }
+    }
+
+    private func pollScript(status: URL, log: URL, version: String, started: Date) {
+        if let text = try? String(contentsOf: status, encoding: .utf8) {
+            statusTimer?.invalidate()
+            if text.trimmingCharacters(in: .whitespacesAndNewlines) == "0" {
+                state = .installed(version)
+            } else {
+                let tail = (try? String(contentsOf: log, encoding: .utf8))?
+                    .split(separator: "\n").suffix(3).joined(separator: " ") ?? ""
+                state = .failed("The update failed: \(tail) (full log in \(log.path))")
+            }
+        } else if Date().timeIntervalSince(started) > 15 * 60 {
+            statusTimer?.invalidate()
+            state = .failed("The update didn't finish. Details are in \(log.path).")
         }
     }
 
@@ -209,19 +255,48 @@ final class Updater: ObservableObject {
             }
 
             let current = Bundle.main.bundleURL.path
+            let folder = Bundle.main.bundleURL.deletingLastPathComponent().path
+            guard FileManager.default.isWritableFile(atPath: folder) else {
+                throw UpdateError("Floe can't replace itself in \(folder). Download the new version from GitHub instead.")
+            }
             Log.info("Updater: replacing \(current) with \(version)")
-            // Swap once Floe has quit, then start the new version.
-            let script = "sleep 1; rm -rf \(shellQuote(current)) && /usr/bin/ditto \(shellQuote(newApp.path)) \(shellQuote(current)) && open \(shellQuote(current))"
-            try Self.launchDetached(script)
-            NSApp.terminate(nil)
+            // Keeps the old app until the new one is in place, and puts it
+            // back if copying fails, so a failed update never leaves no Floe.
+            let old = "\(current).old"
+            let swap = "rm -rf \(shellQuote(old)) && mv \(shellQuote(current)) \(shellQuote(old)) && "
+                + "if /usr/bin/ditto \(shellQuote(newApp.path)) \(shellQuote(current)); then rm -rf \(shellQuote(old)); "
+                + "else rm -rf \(shellQuote(current)); mv \(shellQuote(old)) \(shellQuote(current)); exit 1; fi"
+            if relaunches {
+                // Swap once Floe has quit, then start whichever version is there.
+                try Self.launchDetached("sleep 1; \(swap); open \(shellQuote(current))")
+                NSApp.terminate(nil)
+            } else {
+                let (ok, output) = await Self.runCapturing("/bin/sh", ["-c", swap])
+                state = ok ? .installed(version) : .failed("Couldn't swap in the new version: \(output)")
+            }
         } catch {
             state = .failed("Update failed: \(error.localizedDescription)")
         }
     }
 
-    private static func relaunch(_ path: String = Bundle.main.bundleURL.path) {
-        try? launchDetached("sleep 1; open \(shellQuote(path))")
+    private func finish(_ version: String, launching path: String) {
+        state = .installed(version)
+        guard relaunches else { return }
+        try? Self.launchDetached("sleep 1; open \(shellQuote(path))")
         NSApp.terminate(nil)
+    }
+
+    /// True when Floe is ad-hoc signed, so macOS asks for Accessibility
+    /// again after every update.
+    nonisolated static var isAdHocSigned: Bool {
+        var code: SecCode?
+        var staticCode: SecStaticCode?
+        var info: CFDictionary?
+        guard SecCodeCopySelf([], &code) == errSecSuccess, let code,
+              SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode,
+              SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
+              let flags = (info as? [String: Any])?[kSecCodeInfoFlags as String] as? UInt32 else { return false }
+        return flags & SecCodeSignatureFlags.adhoc.rawValue != 0
     }
 
     // MARK: - Install method
@@ -235,9 +310,12 @@ final class Updater: ObservableObject {
         if path.contains("/dist/") || path.contains("/dist.noindex/") || path.contains("/.build/") {
             return .development
         }
-        if let marker = try? String(contentsOf: installMarkerURL, encoding: .utf8),
-           marker.trimmingCharacters(in: .whitespacesAndNewlines) == "script" {
-            return .script
+        // The script writes "script" and the app it installed.
+        if let marker = try? String(contentsOf: installMarkerURL, encoding: .utf8) {
+            let lines = marker.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+            if lines.first == "script", lines.count < 2 || lines[1] == Bundle.main.bundleURL.path {
+                return .script
+            }
         }
         return .download
     }

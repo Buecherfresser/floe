@@ -105,6 +105,12 @@ struct GeneralSettingsView: View {
             Section("Updates") {
                 LabeledContent("Version", value: AppVersion.current)
                 updateStatus
+                if case .homebrew = updater.installMethod, Updater.isAdHocSigned {
+                    Text("Run `floe-sign $(brew --prefix)/opt/floe/Floe.app` in Terminal once, so macOS keeps Floe's Accessibility permission across updates.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .textSelection(.enabled)
+                }
                 if updater.installMethod != .development {
                     Toggle("Install updates automatically", isOn: Binding(
                         get: { updater.installsAutomatically },
@@ -176,6 +182,9 @@ struct GeneralSettingsView: View {
             case .updating(let message):
                 ProgressView().controlSize(.small)
                 Text(message)
+            case .installed(let version):
+                Label("Floe \(version) is installed. Restarting…", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
             case .failed(let message):
                 Label(message, systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
@@ -183,10 +192,15 @@ struct GeneralSettingsView: View {
             Spacer()
             if case .available(let release) = updater.state, updater.installMethod != .development {
                 Button("Update") { updater.install(release) }
-            } else if updater.state != .checking, !isUpdating {
+            } else if updater.state != .checking, !isUpdating, !isInstalled {
                 Button("Check Now") { updater.check() }
             }
         }
+    }
+
+    private var isInstalled: Bool {
+        if case .installed = updater.state { return true }
+        return false
     }
 
     private var isUpdating: Bool {

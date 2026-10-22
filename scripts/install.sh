@@ -103,7 +103,7 @@ ditto "$BUILT" "$TARGET"
 # Tells Floe's updater to update through this script.
 MARKER_DIR="$HOME/Library/Application Support/Floe"
 mkdir -p "$MARKER_DIR"
-printf 'script\n' > "$MARKER_DIR/install-method"
+printf 'script\n%s\n' "$TARGET" > "$MARKER_DIR/install-method"
 
 if [[ "$LAUNCH" -eq 1 ]]; then
     open "$TARGET"

@@ -12,7 +12,11 @@ set -euo pipefail
 # own keychain under ~/Library/Application Support/Floe/signing. Trusting that
 # certificate for code signing asks for your password once.
 
-APP="${1:?usage: sign-local.sh <path to Floe.app>}"
+# --if-set-up only re-signs: it doesn't create the certificate, since that
+# asks for a password. Floe's updater uses it.
+IF_SET_UP=0
+if [[ "${1:-}" == "--if-set-up" ]]; then IF_SET_UP=1; shift; fi
+APP="${1:?usage: sign-local.sh [--if-set-up] <path to Floe.app>}"
 IDENTITY_NAME="Floe Local Signing"
 SIGNING_DIR="$HOME/Library/Application Support/Floe/signing"
 KEYCHAIN="$SIGNING_DIR/floe-signing.keychain-db"
@@ -79,6 +83,10 @@ CNF
 }
 
 if [[ ! -f "$KEYCHAIN" || ! -f "$PASSWORD_FILE" ]]; then
+    if [[ "$IF_SET_UP" -eq 1 ]]; then
+        echo "==> Local signing isn't set up; leaving the app as it is."
+        exit 0
+    fi
     if ! create_identity; then
         echo "    Couldn't set up the certificate."
         sign_adhoc

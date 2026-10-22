@@ -129,6 +129,10 @@ enum Diagnostics {
                 Thread.sleep(forTimeInterval: 0.1)
             }
             return out
+        case "update":
+            // update — installs the latest release the way this copy was
+            // installed, without restarting into it
+            return MainActor.assumeIsolated { runUpdate() }
         case "report":
             // report — what Copy Diagnostics in Settings puts on the clipboard
             return MainActor.assumeIsolated { DiagnosticReport.summary() } + "\n" + DiagnosticReport.recentLog()
@@ -308,6 +312,25 @@ enum Diagnostics {
                 .frame(width: 600, height: 560)
             out += snapshot(root, size: NSSize(width: 600, height: 560), to: "\(directory)/\(name).png")
         }
+        return out
+    }
+
+    @MainActor
+    private static func runUpdate() -> String {
+        let updater = Updater.shared
+        updater.relaunches = false
+        var out = "running=\(AppVersion.current) method=\(updater.installMethod.title)\n"
+        updater.check(install: true)
+        let deadline = Date().addingTimeInterval(20 * 60)
+        while Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+            switch updater.state {
+            case .idle, .checking, .available, .updating: continue
+            case .upToDate, .installed, .failed: break
+            }
+            break
+        }
+        out += "state=\(updater.state)\n"
         return out
     }
 
