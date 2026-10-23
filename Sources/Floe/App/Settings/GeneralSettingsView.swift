@@ -5,12 +5,12 @@ struct GeneralSettingsView: View {
     @EnvironmentObject private var accessibilityService: AccessibilityService
     @ObservedObject private var updater = Updater.shared
 
-    @State private var openAtLogin = LoginItem.isEnabled
-    @State private var loginNeedsApproval = LoginItem.needsApproval
-    @State private var issues: [SystemIssue] = []
-    @State private var newIgnoredApp = ""
-    @State private var diagnostics: DiagnosticsState = .idle
-    @State private var confirmsUninstall = false
+    @ViewState private var openAtLogin = LoginItem.isEnabled
+    @ViewState private var loginNeedsApproval = LoginItem.needsApproval
+    @ViewState private var issues: [SystemIssue] = []
+    @ViewState private var newIgnoredApp = ""
+    @ViewState private var diagnostics: DiagnosticsState = .idle
+    @ViewState private var confirmsUninstall = false
 
     private enum DiagnosticsState { case idle, collecting, copied }
 

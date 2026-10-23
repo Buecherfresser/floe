@@ -140,8 +140,8 @@ final class BearPlayerView: NSView {
 /// before the real clips exist.
 private struct StandInBear: View {
     let clip: BearClip
-    @State private var phase = false
-    @State private var hop = false
+    @ViewState private var phase = false
+    @ViewState private var hop = false
 
     var body: some View {
         Image(nsImage: NSApplication.shared.applicationIconImage)

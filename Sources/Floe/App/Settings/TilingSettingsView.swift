@@ -2,7 +2,7 @@ import SwiftUI
 
 struct TilingSettingsView: View {
     @EnvironmentObject private var configManager: ConfigManager
-    @State private var newRuleApp = ""
+    @ViewState private var newRuleApp = ""
 
     private var tiling: TilingConfig { configManager.config.tiling }
 

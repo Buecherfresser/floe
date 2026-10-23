@@ -3,7 +3,7 @@ import SwiftUI
 struct DesktopsSettingsView: View {
     @EnvironmentObject private var configManager: ConfigManager
     @EnvironmentObject private var core: FloeCore
-    @State private var monitors: [Monitor] = Monitors.ordered()
+    @ViewState private var monitors: [Monitor] = Monitors.ordered()
 
     var body: some View {
         Form {

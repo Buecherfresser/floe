@@ -2,7 +2,7 @@ import SwiftUI
 
 struct HotkeysSettingsView: View {
     @EnvironmentObject private var configManager: ConfigManager
-    @State private var recordingIndex: Int?
+    @ViewState private var recordingIndex: Int?
 
     private var bindings: [HotkeyBinding] { configManager.config.hotkeys.bindings }
 
@@ -138,7 +138,7 @@ struct HotkeysSettingsView: View {
 struct KeyRecorder: View {
     @Binding var hotkey: Hotkey
     @Binding var isRecording: Bool
-    @State private var monitor: Any?
+    @ViewState private var monitor: Any?
 
     var body: some View {
         Button {

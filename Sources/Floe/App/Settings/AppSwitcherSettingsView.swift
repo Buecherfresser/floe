@@ -3,8 +3,8 @@ import UniformTypeIdentifiers
 
 struct AppSwitcherSettingsView: View {
     @EnvironmentObject private var configManager: ConfigManager
-    @State private var newShortcutKey = ""
-    @State private var fnUsage: FnKeySetting.Usage? = FnKeySetting.current
+    @ViewState private var newShortcutKey = ""
+    @ViewState private var fnUsage: FnKeySetting.Usage? = FnKeySetting.current
 
     private var apps: [AppShortcut] { configManager.config.appSwitcher.apps }
 

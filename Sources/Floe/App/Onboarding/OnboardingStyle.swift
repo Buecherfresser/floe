@@ -48,7 +48,7 @@ struct InkButtonStyle: ButtonStyle {
     private struct InkButton: View {
         let configuration: ButtonStyleConfiguration
         let inverted: Bool
-        @State private var hovering = false
+        @ViewState private var hovering = false
 
         var body: some View {
             let pressed = configuration.isPressed
@@ -232,7 +232,7 @@ struct InkSwitch: View {
 struct Confetti: View {
     let trigger: Int
 
-    @State private var start: Date?
+    @ViewState private var start: Date?
     private static let shades: [Color] = [Palette.ink, Palette.ink, Color(white: 0.55), Color(white: 0.8)]
     private static let pieces: [(angle: Double, speed: Double, spin: Double, shade: Int, size: Double)] =
         (0..<60).map { i in
