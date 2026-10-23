@@ -1,6 +1,6 @@
 # Floe
 
-Floe is a tiling window manager for macOS 26 that works with System Integrity Protection (SIP) left on. It tiles your windows on every display, focuses the window under the mouse and switches desktops instantly.
+Floe is a tiling window manager for macOS 27 (and macOS 26) that works with System Integrity Protection (SIP) left on. It tiles your windows on every display, focuses the window under the mouse and switches desktops instantly.
 
 https://github.com/user-attachments/assets/5d0ffbd8-4222-4b7d-9b62-0dad385cac75
 
@@ -19,7 +19,7 @@ https://github.com/user-attachments/assets/5d0ffbd8-4222-4b7d-9b62-0dad385cac75
 
 ## Install
 
-Floe needs macOS 26. Pick one of three ways; each one keeps Floe up to date by itself.
+Floe runs on macOS 27 and macOS 26. Pick one of three ways; each one keeps Floe up to date by itself.
 
 **Install script.** Builds Floe on your Mac with Apple's Command Line Tools (the script offers to install them) and puts it into `/Applications`:
 

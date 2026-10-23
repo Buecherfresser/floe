@@ -6,8 +6,9 @@ import AppKit
 /// that keep failing while Floe runs, so a macOS update that breaks one shows
 /// up as a check instead of Floe quietly misbehaving.
 enum Compatibility {
-    /// The macOS version Floe was made and tested on.
-    static let testedMajorVersion = 26
+    /// The newest macOS version Floe was made and tested on (it supports
+    /// this one and the one before).
+    static let testedMajorVersion = 27
 
     struct Probe: Equatable {
         let name: String

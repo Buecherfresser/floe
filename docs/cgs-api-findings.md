@@ -1,4 +1,4 @@
-# Space API Findings (macOS 26 / Darwin 25.2)
+# Space API Findings (macOS 26 and 27)
 
 ## CGS Private APIs
 
@@ -99,6 +99,27 @@ the active space does not change. yabai uses the same path since 7.1.25 (May 202
 Other bridged operations exist (`ManagedDisplaySetCurrentSpace`, `Show/HideSpaces`,
 `SpaceCreate/Destroy`, `MoveManagedSpaceToDisplayIndex`, …) but are untested; they may
 not update the Dock's own space model.
+
+## What Changed in macOS 27
+
+Checked on macOS 27.0.1 (26A434). The bridged window move and the space queries
+work unchanged. Two things broke:
+
+- **Dock swipes.** WindowServer drops a synthetic Dock swipe unless it carries the
+  IOHIDEvent a real trackpad swipe has. `DockSwipe.swift` appends a fluid-touch gesture
+  event (plus a velocity event on Ended) to the CGEvent's serialized data under field
+  4205 and posts a companion gesture event (type 29). The sign of "next desktop" follows
+  the natural scrolling setting. Ported from
+  [InstantSpaceSwitcher](https://github.com/jurplel/InstantSpaceSwitcher) (MIT).
+  Swiping past the last desktop wedges the Dock (black screen), so never overshoot.
+- **Mission Control.** Its UI moved from the Dock into the WindowManager process. The
+  identifiers (`mc.display`, `mc.spaces.list`, `mc.spaces.add`, `AXRemoveDesktop`) are
+  the same, but there's no `mc` group around them, and the Dock keeps an empty `mc`
+  group with a zero frame.
+
+The macOS 27 SDK also makes SwiftUI's `@State` a macro whose plugin ships only with
+Xcode, so Floe uses it through a type alias (`ViewState`) to build with the Command
+Line Tools.
 
 ## Creating, Removing and Moving Desktops
 

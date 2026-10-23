@@ -33,9 +33,9 @@ done
 say() { echo "==> $*"; }
 fail() { echo "Error: $*" >&2; exit 1; }
 
-# macOS 26 or later
+# macOS 27 or 26
 MACOS_MAJOR="$(sw_vers -productVersion | cut -d. -f1)"
-[[ "$MACOS_MAJOR" -ge 26 ]] || fail "Floe needs macOS 26 or later (this Mac runs $(sw_vers -productVersion))."
+[[ "$MACOS_MAJOR" -ge 26 ]] || fail "Floe runs on macOS 27 and macOS 26 (this Mac runs $(sw_vers -productVersion))."
 
 # Floe is built here, which needs Apple's Command Line Tools with Swift 6.2.
 if ! xcode-select -p >/dev/null 2>&1 || ! command -v swift >/dev/null 2>&1; then
