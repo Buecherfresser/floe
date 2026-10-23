@@ -5,6 +5,8 @@ struct AppSwitcherSettingsView: View {
     @EnvironmentObject private var configManager: ConfigManager
     @ViewState private var newShortcutKey = ""
     @ViewState private var fnUsage: FnKeySetting.Usage? = FnKeySetting.current
+    /// Key of the shortcut whose key is being recorded.
+    @ViewState private var recordingKey: String?
 
     private var apps: [AppShortcut] { configManager.config.appSwitcher.apps }
 
@@ -32,12 +34,18 @@ struct AppSwitcherSettingsView: View {
                     }
                 }
 
-                Section("Apps") {
+                Section {
                     ForEach(apps, id: \.key) { shortcut in
                         HStack {
-                            Text("fn \(shortcut.key.uppercased())")
-                                .font(.system(.body, design: .rounded))
-                                .frame(width: 50, alignment: .leading)
+                            AppKeyRecorder(
+                                key: shortcut.key,
+                                isRecording: Binding(
+                                    get: { recordingKey == shortcut.key },
+                                    set: { recordingKey = $0 ? shortcut.key : nil }
+                                ),
+                                onRecord: { newKey in changeKey(of: shortcut, to: newKey) }
+                            )
+                            .frame(width: 64)
                             if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: shortcut.bundleID) {
                                 Image(nsImage: NSWorkspace.shared.icon(forFile: url.path))
                                     .resizable()
@@ -78,6 +86,12 @@ struct AppSwitcherSettingsView: View {
                             .font(.caption)
                             .foregroundStyle(.orange)
                     }
+                } header: {
+                    Text("Apps")
+                } footer: {
+                    Text("Click a key to change it. Pressing a key another app has swaps the two.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
@@ -116,6 +130,22 @@ struct AppSwitcherSettingsView: View {
         newShortcutKey = ""
     }
 
+    /// Gives `shortcut` a new key. An app that already has that key gets the
+    /// old one, so keys can be swapped in one go.
+    private func changeKey(of shortcut: AppShortcut, to newKey: String) {
+        guard newKey != shortcut.key else { return }
+        configManager.update { config in
+            for index in config.appSwitcher.apps.indices {
+                if config.appSwitcher.apps[index].key == newKey {
+                    config.appSwitcher.apps[index].key = shortcut.key
+                } else if config.appSwitcher.apps[index].key == shortcut.key {
+                    config.appSwitcher.apps[index].key = newKey
+                }
+            }
+            config.appSwitcher.apps.sort { $0.key < $1.key }
+        }
+    }
+
     private func chooseApplication() {
         let panel = NSOpenPanel()
         panel.directoryURL = URL(fileURLWithPath: "/Applications")
@@ -124,5 +154,64 @@ struct AppSwitcherSettingsView: View {
         guard panel.runModal() == .OK, let url = panel.url, let bundle = Bundle(url: url) else { return }
         let name = FileManager.default.displayName(atPath: url.path).replacingOccurrences(of: ".app", with: "")
         addShortcut(bundleID: bundle.bundleIdentifier, name: name)
+    }
+}
+
+/// Shows an app's fn key. Click, then press a key (with or without fn).
+/// Esc cancels.
+private struct AppKeyRecorder: View {
+    let key: String
+    @Binding var isRecording: Bool
+    let onRecord: (String) -> Void
+    @ViewState private var monitor: Any?
+
+    var body: some View {
+        Button {
+            isRecording.toggle()
+        } label: {
+            Text(isRecording ? "Press…" : "fn \(key.uppercased())")
+                .font(.system(.body, design: .rounded))
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .tint(isRecording ? .accentColor : nil)
+        .help("Click, then press the new key")
+        .onChange(of: isRecording) { _, recording in
+            recording ? startRecording() : stopRecording()
+        }
+        .onDisappear { stopRecording() }
+    }
+
+    private func startRecording() {
+        guard monitor == nil else { return }
+        // Floe would otherwise handle fn + key itself.
+        HotkeyService.setSuspended(true)
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            handle(event)
+            return nil
+        }
+    }
+
+    private func stopRecording() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+        HotkeyService.setSuspended(false)
+        if isRecording { isRecording = false }
+    }
+
+    private func handle(_ event: NSEvent) {
+        let keyCode = CGKeyCode(event.keyCode)
+        if keyCode == 0x35 { // Esc
+            stopRecording()
+            return
+        }
+        // Arrows and F-keys always report fn and don't work as app keys.
+        guard let name = KeyCode.name(for: keyCode), name.count == 1,
+              !HotkeyService.implicitFnKeyCodes.contains(keyCode) else {
+            NSSound.beep()
+            return
+        }
+        onRecord(name)
+        stopRecording()
     }
 }
