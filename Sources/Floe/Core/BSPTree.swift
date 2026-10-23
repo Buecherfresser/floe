@@ -260,3 +260,64 @@ extension BSPNode {
         }
     }
 }
+
+// MARK: - Minimum sizes
+
+extension BSPNode {
+    /// Turns splits around whose two sides can't both get their minimum size
+    /// next to each other but can on top of each other (or the other way
+    /// round). A window that needs 1600 pt of width doesn't fit beside another
+    /// window on a laptop screen, but it does above it.
+    func fitting(minimums: [CGWindowID: CGSize], in area: CGRect, innerGap: CGFloat) -> BSPNode {
+        guard case .split(let axis, let ratio, let first, let second) = self else { return self }
+        let firstNeeds = first.minimumSize(minimums, innerGap: innerGap)
+        let secondNeeds = second.minimumSize(minimums, innerGap: innerGap)
+
+        func fits(_ axis: SplitAxis) -> Bool {
+            switch axis {
+            case .vertical:
+                return firstNeeds.width + innerGap + secondNeeds.width <= area.width
+                    && max(firstNeeds.height, secondNeeds.height) <= area.height
+            case .horizontal:
+                return firstNeeds.height + innerGap + secondNeeds.height <= area.height
+                    && max(firstNeeds.width, secondNeeds.width) <= area.width
+            }
+        }
+        let newAxis = !fits(axis) && fits(axis.toggled) ? axis.toggled : axis
+
+        let halfGap = innerGap / 2
+        let firstArea: CGRect
+        let secondArea: CGRect
+        switch newAxis {
+        case .vertical:
+            let splitX = area.minX + area.width * ratio
+            firstArea = CGRect(x: area.minX, y: area.minY, width: splitX - area.minX - halfGap, height: area.height)
+            secondArea = CGRect(x: splitX + halfGap, y: area.minY, width: area.maxX - splitX - halfGap, height: area.height)
+        case .horizontal:
+            let splitY = area.minY + area.height * ratio
+            firstArea = CGRect(x: area.minX, y: area.minY, width: area.width, height: splitY - area.minY - halfGap)
+            secondArea = CGRect(x: area.minX, y: splitY + halfGap, width: area.width, height: area.maxY - splitY - halfGap)
+        }
+        return .split(
+            axis: newAxis,
+            ratio: ratio,
+            first: first.fitting(minimums: minimums, in: firstArea, innerGap: innerGap),
+            second: second.fitting(minimums: minimums, in: secondArea, innerGap: innerGap)
+        )
+    }
+
+    /// The smallest area this part of the tree fits in.
+    func minimumSize(_ minimums: [CGWindowID: CGSize], innerGap: CGFloat) -> CGSize {
+        switch self {
+        case .leaf(let id):
+            return minimums[id] ?? .zero
+        case .split(let axis, _, let first, let second):
+            let a = first.minimumSize(minimums, innerGap: innerGap)
+            let b = second.minimumSize(minimums, innerGap: innerGap)
+            switch axis {
+            case .vertical: return CGSize(width: a.width + innerGap + b.width, height: max(a.height, b.height))
+            case .horizontal: return CGSize(width: max(a.width, b.width), height: a.height + innerGap + b.height)
+            }
+        }
+    }
+}

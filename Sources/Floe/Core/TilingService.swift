@@ -573,10 +573,13 @@ final class TilingService: @unchecked Sendable {
         return applied
     }
 
-    /// The screen's tree with the user's ratios, then widened where a window's
-    /// tile is smaller than its known minimum size.
+    /// The screen's tree with the user's ratios, turned where windows don't
+    /// fit side by side, then widened where a window's tile is smaller than
+    /// its known minimum size.
     private func effectiveTree(for layout: ScreenLayout, key: String) -> BSPNode {
         var tree = layout.baseTree.applying(ratios: userRatios(onScreen: key) ?? [:])
+            .fitting(minimums: minSizes, in: layout.rect.insetBy(dx: layout.outerGap, dy: layout.outerGap),
+                     innerGap: layout.innerGap)
         for windowID in layout.windowIDs {
             guard let minimum = minSizes[windowID] else { continue }
             let frames = tree.calculateFrames(in: layout.rect, innerGap: layout.innerGap, outerGap: layout.outerGap)
