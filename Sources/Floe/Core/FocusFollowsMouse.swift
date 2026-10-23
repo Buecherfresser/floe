@@ -63,6 +63,30 @@ final class FocusFollowsMouse: @unchecked Sendable {
     }
 
     private var spaceChangeObserver: NSObjectProtocol?
+    private var screenChangeObserver: NSObjectProtocol?
+
+    /// The menu bar's strip at the top of each display. With the menu bar set
+    /// to hide, the window below reaches up to the screen edge, and focusing
+    /// it while you reach for the menu bar keeps the menu bar from appearing.
+    private static let menuBarStrips = Locked([CGRect]())
+
+    private static func refreshMenuBarStrips() {
+        let update = {
+            let strips = NSScreen.screens.compactMap { screen -> CGRect? in
+                guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return nil }
+                let bounds = CGDisplayBounds(CGDirectDisplayID(number.uint32Value))
+                // Displays with a notch have a taller menu bar.
+                let height = max(NSStatusBar.system.thickness, screen.safeAreaInsets.top) + 2
+                return CGRect(x: bounds.minX, y: bounds.minY, width: bounds.width, height: height)
+            }
+            menuBarStrips.withLock { $0 = strips }
+        }
+        if Thread.isMainThread { update() } else { DispatchQueue.main.async(execute: update) }
+    }
+
+    private static func isInMenuBarStrip(_ point: CGPoint) -> Bool {
+        menuBarStrips.withLock { $0.contains { $0.contains(point) } }
+    }
 
     private static func consumeIgnoreHover() -> Bool {
         ignoreHoverLock.withLock {
@@ -96,6 +120,13 @@ final class FocusFollowsMouse: @unchecked Sendable {
         ) { _ in
             FocusFollowsMouse.suppress()
         }
+
+        Self.refreshMenuBarStrips()
+        screenChangeObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+        ) { _ in
+            FocusFollowsMouse.refreshMenuBarStrips()
+        }
     }
 
     func stop() {
@@ -103,6 +134,10 @@ final class FocusFollowsMouse: @unchecked Sendable {
             NSWorkspace.shared.notificationCenter.removeObserver(spaceChangeObserver)
         }
         spaceChangeObserver = nil
+        if let screenChangeObserver {
+            NotificationCenter.default.removeObserver(screenChangeObserver)
+        }
+        screenChangeObserver = nil
         eventTapService?.stop()
         eventTapService = nil
         trailingWorkItem?.cancel()
@@ -114,6 +149,14 @@ final class FocusFollowsMouse: @unchecked Sendable {
     private func handleMouseMoved(to point: CGPoint) {
         let cfg = config
         guard cfg.enabled else { return }
+        if Self.isInMenuBarStrip(point) {
+            // Drop a pending focus too, or it lands while the menu bar opens.
+            throttleQueue.async { [weak self] in
+                self?.trailingWorkItem?.cancel()
+                self?.trailingWorkItem = nil
+            }
+            return
+        }
 
         throttleQueue.async { [weak self] in
             self?.throttledLookup(at: point, config: cfg)
