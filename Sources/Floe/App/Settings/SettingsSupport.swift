@@ -44,6 +44,7 @@ enum ActionKind: String, CaseIterable, Identifiable {
     case moveToSpace, moveToSpaceNext, moveToSpacePrev
     case moveToSpaceAndStay, moveToSpaceNextAndStay, moveToSpacePrevAndStay
     case toggleTiling, balanceWindows, increaseSplitRatio, decreaseSplitRatio
+    case reloadFloe
 
     var id: String { rawValue }
 
@@ -62,6 +63,7 @@ enum ActionKind: String, CaseIterable, Identifiable {
         case .balanceWindows: "Balance windows"
         case .increaseSplitRatio: "Grow first window"
         case .decreaseSplitRatio: "Shrink first window"
+        case .reloadFloe: "Reload Floe"
         }
     }
 
@@ -84,6 +86,7 @@ enum ActionKind: String, CaseIterable, Identifiable {
         case .balanceWindows: .balanceWindows
         case .increaseSplitRatio: .increaseSplitRatio
         case .decreaseSplitRatio: .decreaseSplitRatio
+        case .reloadFloe: .reloadFloe
         }
     }
 
@@ -103,6 +106,7 @@ enum ActionKind: String, CaseIterable, Identifiable {
         case .balanceWindows: (.balanceWindows, 1)
         case .increaseSplitRatio: (.increaseSplitRatio, 1)
         case .decreaseSplitRatio: (.decreaseSplitRatio, 1)
+        case .reloadFloe: (.reloadFloe, 1)
         case .focusApp, .pullApp: nil
         }
     }

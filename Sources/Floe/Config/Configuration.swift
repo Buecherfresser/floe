@@ -75,6 +75,9 @@ enum Action: Equatable, Sendable {
     /// Move the app's most recent window onto the current space and focus it,
     /// or launch the app. Value: bundle identifier.
     case pullApp(String)
+    /// Re-read the settings file and restart every service, e.g. after the
+    /// menu bar or Dock changed size.
+    case reloadFloe
 }
 
 extension Action: Codable {
@@ -87,6 +90,7 @@ extension Action: Codable {
         case toggleTiling, balanceWindows
         case increaseSplitRatio, decreaseSplitRatio
         case focusApp, pullApp
+        case reloadFloe
     }
 
     init(from decoder: Decoder) throws {
@@ -117,6 +121,7 @@ extension Action: Codable {
             if keyed.contains(.balanceWindows) { self = .balanceWindows; return }
             if keyed.contains(.increaseSplitRatio) { self = .increaseSplitRatio; return }
             if keyed.contains(.decreaseSplitRatio) { self = .decreaseSplitRatio; return }
+            if keyed.contains(.reloadFloe) { self = .reloadFloe; return }
         }
 
         // Plain string for parameterless actions
@@ -133,6 +138,7 @@ extension Action: Codable {
             case "balanceWindows": self = .balanceWindows; return
             case "increaseSplitRatio": self = .increaseSplitRatio; return
             case "decreaseSplitRatio": self = .decreaseSplitRatio; return
+            case "reloadFloe": self = .reloadFloe; return
             default: break
             }
         }
@@ -183,6 +189,9 @@ extension Action: Codable {
         case .decreaseSplitRatio:
             var c = encoder.singleValueContainer()
             try c.encode("decreaseSplitRatio")
+        case .reloadFloe:
+            var c = encoder.singleValueContainer()
+            try c.encode("reloadFloe")
         case .focusApp(let bundleID):
             var c = encoder.container(keyedBy: CodingKeys.self)
             try c.encode(bundleID, forKey: .focusApp)
@@ -203,14 +212,16 @@ struct HotkeysConfig: Codable, Equatable, Sendable {
     var bindings: [HotkeyBinding]
 
     /// Ctrl+N switches to desktop N (the shortcut macOS users already know),
-    /// Ctrl+Shift+N sends the focused window there.
+    /// Ctrl+Shift+N sends the focused window there, Ctrl+Option+R reloads Floe.
     static let `default` = HotkeysConfig(
         enabled: true,
         bindings: (1...9).flatMap { n in [
             HotkeyBinding(hotkey: Hotkey(modifiers: [.ctrl], key: "\(n)"), action: .focusSpace(n)),
             HotkeyBinding(hotkey: Hotkey(modifiers: [.ctrl, .shift], key: "\(n)"), action: .moveWindowToSpaceAndReturn(n)),
-        ] }
+        ] } + [reloadBinding]
     )
+
+    static let reloadBinding = HotkeyBinding(hotkey: Hotkey(modifiers: [.ctrl, .alt], key: "r"), action: .reloadFloe)
 }
 
 // MARK: - Tiling

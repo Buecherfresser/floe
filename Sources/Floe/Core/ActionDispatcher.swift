@@ -5,6 +5,8 @@ final class ActionDispatcher: @unchecked Sendable {
     private let spacesService: SpacesService
     var tilingService: TilingService?
     var configManager: ConfigManager?
+    /// Set by FloeCore, which owns the services a reload restarts.
+    var reload: (@Sendable () -> Void)?
 
     init(spacesService: SpacesService) {
         self.spacesService = spacesService
@@ -72,6 +74,9 @@ final class ActionDispatcher: @unchecked Sendable {
                     $0.tiling.splitRatio = max(0.1, $0.tiling.splitRatio - 0.05)
                 }
             }
+
+        case .reloadFloe:
+            reload?()
         }
     }
 }

@@ -20,7 +20,25 @@ final class ConfigManager: ObservableObject {
         self.configURL = Self.configDirectory.appendingPathComponent("config.yaml")
         self.config = .default
         self.config = loadOrCreate()
+        addReloadHotkeyOnce()
         startWatching()
+    }
+
+    /// Re-reads the settings file, e.g. for the reload hotkey.
+    func reloadFromDisk() {
+        if let fromDisk = decodeFromDisk() { config = fromDisk }
+    }
+
+    /// Settings from before the reload hotkey existed get it once, unless
+    /// Ctrl+Option+R is already taken. Removing it afterwards sticks.
+    private func addReloadHotkeyOnce() {
+        let key = "addedReloadHotkey"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        UserDefaults.standard.set(true, forKey: key)
+        let reload = HotkeysConfig.reloadBinding
+        guard !config.hotkeys.bindings.contains(where: { $0.action == .reloadFloe || $0.hotkey == reload.hotkey }) else { return }
+        Log.info("ConfigManager: adding the Ctrl+Option+R reload hotkey")
+        update { $0.hotkeys.bindings.append(reload) }
     }
 
     deinit {

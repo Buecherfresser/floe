@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Combine
 
@@ -27,6 +28,19 @@ final class FloeCore: ObservableObject {
         self.accessibilityService = accessibilityService
         self.spacesService = SpacesService(accessibilityService: accessibilityService)
         actionDispatcher.configManager = configManager
+        actionDispatcher.reload = { [weak self] in
+            DispatchQueue.main.async { self?.reload() }
+        }
+
+        // Showing or hiding the menu bar or Dock changes the space windows
+        // can use, without any window moving.
+        NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
+            .debounce(for: .milliseconds(500), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in
+                Log.info("Core: screen parameters changed, retiling")
+                self?.tilingService?.retile()
+            }
+            .store(in: &cancellables)
 
         configManager.$config
             .removeDuplicates()
@@ -52,6 +66,15 @@ final class FloeCore: ObservableObject {
         isPaused = false
         applyConfig(configManager.config)
         isRunning = true
+    }
+
+    /// Re-reads the settings and restarts every service from scratch.
+    func reload() {
+        guard hasStarted, !isPaused else { return }
+        Log.info("Core: reloading")
+        configManager.reloadFromDisk()
+        stop()
+        start()
     }
 
     /// Pauses everything until `start()`.
