@@ -3,8 +3,8 @@
 class Floe < Formula
   desc "Tiling window manager for macOS that works with SIP on"
   homepage "https://github.com/Buecherfresser/floe"
-  url "https://github.com/Buecherfresser/floe/archive/refs/tags/v0.1.3.tar.gz"
-  sha256 "6bbb6d8a9c19bfd9c1fd735697e17eaedaf165f5cd0968df58b9470acff0029c"
+  url "https://github.com/Buecherfresser/floe/archive/refs/tags/v0.1.4.tar.gz"
+  sha256 "00e427e4d2a36fc959f7ed72648aa87b79a9fa5551ae859fef6438cdb9ffba26"
   license "MIT"
   head "https://github.com/Buecherfresser/floe.git", branch: "main"
 
