@@ -23,9 +23,14 @@ final class TilingService: @unchecked Sendable {
     /// Maps pid_t -> AXObserver for per-app window event observation.
     private var axObservers: [pid_t: AXObserver] = [:]
 
-    /// Windows that refused their tile size (fixed-size windows such as
-    /// System Settings). They float for the rest of their lifetime.
+    /// Windows that don't take part in tiling: ones that refused their tile
+    /// size (fixed-size windows such as System Settings), are held at a frame,
+    /// or that the user resized while alone.
     private var floatingWindowIDs: Set<CGWindowID> = []
+    /// Of those, the ones floated for refusing their tile, with how many other
+    /// windows shared their screen then. With fewer neighbours (alone on a
+    /// desktop, say) they get their tile back.
+    private var refusalFloated: [CGWindowID: Int] = [:]
     /// When a window was first seen staying larger than its tile. Some apps
     /// resize asynchronously, so one reading isn't conclusive.
     private var firstRefusal: [CGWindowID: DispatchTime] = [:]
@@ -174,6 +179,7 @@ final class TilingService: @unchecked Sendable {
         }
         lock.withLock {
             floatingWindowIDs.removeAll()
+            refusalFloated.removeAll()
             firstRefusal.removeAll()
             trackedWindowIDs.removeAll()
             windowOwners.removeAll()
@@ -194,6 +200,7 @@ final class TilingService: @unchecked Sendable {
             // Also give floated windows another chance.
             self.lock.withLock {
                 self.floatingWindowIDs.removeAll()
+                self.refusalFloated.removeAll()
                 self.firstRefusal.removeAll()
             }
             self.scheduleRetile()
@@ -321,6 +328,7 @@ final class TilingService: @unchecked Sendable {
             for wid in toRemove {
                 trackedWindowIDs.removeAll { $0 == wid }
                 floatingWindowIDs.remove(wid)
+                refusalFloated.removeValue(forKey: wid)
                 firstRefusal.removeValue(forKey: wid)
                 windowOwners.removeValue(forKey: wid)
                 windowElements.removeValue(forKey: wid)
@@ -444,7 +452,25 @@ final class TilingService: @unchecked Sendable {
         var applied = 0
         var refusedAny = false
         var activeKeys: Set<String> = []
-        for (screenIndex, ids) in windowsByScreen {
+        let refusedBefore = lock.withLock { refusalFloated }
+        for (screenIndex, allIDs) in windowsByScreen {
+            // A window that refused its tile rejoins once fewer windows share
+            // its screen than when it was floated, and keeps floating otherwise.
+            var ids = allIDs
+            let others = allIDs.subtracting(refusedBefore.keys).count
+            for windowID in allIDs {
+                guard let neighbours = refusedBefore[windowID] else { continue }
+                if others < neighbours {
+                    Log.info("Tiling: wid=\(windowID) has room now (\(others) other window(s), was \(neighbours)) — tiling it again")
+                    lock.withLock {
+                        floatingWindowIDs.remove(windowID)
+                        refusalFloated[windowID] = nil
+                        firstRefusal[windowID] = nil
+                    }
+                } else {
+                    ids.remove(windowID)
+                }
+            }
             // Preserve the original insertion order from trackedWindowIDs.
             let orderedIDs = trackedOrder.filter { ids.contains($0) }
             guard let tree = buildFn(orderedIDs) else { continue }
@@ -513,6 +539,7 @@ final class TilingService: @unchecked Sendable {
                     Log.info("Tiling: wid=\(windowID) refused size \(frame.size) (got \(actual.size)) — floating it")
                     lock.withLock {
                         floatingWindowIDs.insert(windowID)
+                        refusalFloated[windowID] = orderedIDs.count - 1
                         firstRefusal[windowID] = nil
                     }
                 }
@@ -1151,7 +1178,9 @@ final class TilingService: @unchecked Sendable {
             cgWindowsByPID[pid, default: []].append(CGWindowInfo(windowID: windowID, bounds: bounds))
         }
 
-        let floating = lock.withLock { floatingWindowIDs }
+        // Windows floated for refusing their tile still come back here, so
+        // a retile can see whether they fit now.
+        let floating = lock.withLock { floatingWindowIDs.subtracting(refusalFloated.keys) }
 
         // For each PID, match AX windows to CG windows by window ID (falling
         // back to position+size if the private lookup fails).
