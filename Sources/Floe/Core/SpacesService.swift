@@ -377,6 +377,13 @@ final class SpacesService: @unchecked Sendable {
                 spaces = CGSSpaceService.spaces(forWindow: windowID)
             }
 
+            // On a fullscreen space (a video going fullscreen, say) it isn't
+            // a window to sort onto a desktop.
+            let desktops = Set(CGSSpaceService.userSpaceIDs())
+            if !spaces.isEmpty, !spaces.contains(where: desktops.contains) {
+                Log.info("Spaces: window \(windowID) is on no desktop (spaces \(spaces)), leaving it")
+                return
+            }
             if spaces.contains(target) {
                 Log.info("Spaces: window \(windowID) opened on desktop \(index) already")
                 if follow {

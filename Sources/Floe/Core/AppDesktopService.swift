@@ -5,6 +5,11 @@ import ApplicationServices
 /// window after launch and every one after. Windows that exist when Floe
 /// starts stay where they are, and so does a window once the user has moved
 /// it: each window is placed only once.
+///
+/// "New" means created after we started watching. The window server hands
+/// out window numbers in increasing order, so anything at or below the
+/// newest number we saw at start is old — even a window we never got to see,
+/// because Accessibility only lists windows on the desktops currently shown.
 final class AppDesktopService: @unchecked Sendable {
 
     private let accessibilityService: AccessibilityService
@@ -13,8 +18,10 @@ final class AppDesktopService: @unchecked Sendable {
     private let lock = NSLock()
     private var config: AppDesktopsConfig
     private var axObservers: [pid_t: AXObserver] = [:]
-    /// Windows already placed (or there before we looked), with their owner.
+    /// Windows already placed, with their owner.
     private var seenWindows: [CGWindowID: pid_t] = [:]
+    /// Newest window number when we started watching. Windows up to it are old.
+    private var newestOldWindowID: CGWindowID = 0
     private var workspaceObservers: [NSObjectProtocol] = []
 
     /// A launching app's first window can appear before its AX observer is
@@ -31,6 +38,8 @@ final class AppDesktopService: @unchecked Sendable {
 
     func start() {
         Log.info("AppDesktops: starting with \(config.apps.count) app(s)")
+        let newest = Self.newestWindowID()
+        lock.withLock { newestOldWindowID = newest }
         registerWorkspaceObservers()
         observeRunningApps()
     }
@@ -80,15 +89,11 @@ final class AppDesktopService: @unchecked Sendable {
         workspaceObservers = [launch, terminate]
     }
 
-    /// Watches configured apps that are already running. Their current
-    /// windows count as placed.
+    /// Watches configured apps that are already running. Their windows
+    /// are older than `newestOldWindowID`, so they stay put.
     private func observeRunningApps() {
         for app in runningConfiguredApps() {
-            let pid = app.processIdentifier
-            guard !lock.withLock({ axObservers[pid] != nil }) else { continue }
-            let existing = windows(of: pid).map(\.id)
-            lock.withLock { for id in existing { seenWindows[id] = pid } }
-            addObserver(for: pid)
+            addObserver(for: app.processIdentifier)
         }
     }
 
@@ -111,35 +116,52 @@ final class AppDesktopService: @unchecked Sendable {
         CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .defaultMode)
     }
 
+    /// Only the window the notification is about: other windows of the app
+    /// can surface at the same time (say, when one goes fullscreen) without
+    /// being new.
     fileprivate func windowCreated(_ element: AXUIElement) {
         var pid: pid_t = 0
-        guard AXUIElementGetPid(element, &pid) == .success else { return }
-        placeNewWindows(of: pid)
+        guard AXUIElementGetPid(element, &pid) == .success,
+              let app = NSRunningApplication(processIdentifier: pid),
+              accessibilityService.isStandardWindow(element),
+              let id = accessibilityService.windowID(of: element) else { return }
+        place((id, element), of: app)
     }
 
     // MARK: - Placement
 
+    /// After a launch: every window the app has is new.
     private func placeNewWindows(of pid: pid_t) {
-        guard let app = NSRunningApplication(processIdentifier: pid), let desktop = desktop(for: app) else { return }
-        let bundleID = app.bundleIdentifier ?? ""
-
+        guard let app = NSRunningApplication(processIdentifier: pid) else { return }
         for window in windows(of: pid) {
-            let isNew = lock.withLock { () -> Bool in
-                guard seenWindows[window.id] == nil else { return false }
-                seenWindows[window.id] = pid
-                return true
-            }
-            guard isNew else { continue }
-            guard !spacesService.isPulling(bundleID: bundleID) else {
-                Log.info("AppDesktops: \(bundleID) window \(window.id) is being pulled, leaving it")
-                continue
-            }
-            // The user opened it if the app is in front; otherwise it opened
-            // by itself and shouldn't drag the user along.
-            let follow = app.isActive
-            Log.info("AppDesktops: \(bundleID) opened window \(window.id), sending it to desktop \(desktop) (follow=\(follow))")
-            spacesService.openOnDesktop(windowID: window.id, pid: pid, element: window.element, desktop: desktop, follow: follow)
+            place(window, of: app)
         }
+    }
+
+    private func place(_ window: (id: CGWindowID, element: AXUIElement), of app: NSRunningApplication) {
+        guard let desktop = desktop(for: app) else { return }
+        let bundleID = app.bundleIdentifier ?? ""
+        let pid = app.processIdentifier
+
+        let isNew = lock.withLock { () -> Bool in
+            guard window.id > newestOldWindowID, seenWindows[window.id] == nil else { return false }
+            seenWindows[window.id] = pid
+            return true
+        }
+        guard isNew else { return }
+        guard !accessibilityService.isFullScreen(window.element) else {
+            Log.info("AppDesktops: \(bundleID) window \(window.id) is fullscreen, leaving it")
+            return
+        }
+        guard !spacesService.isPulling(bundleID: bundleID) else {
+            Log.info("AppDesktops: \(bundleID) window \(window.id) is being pulled, leaving it")
+            return
+        }
+        // The user opened it if the app is in front; otherwise it opened
+        // by itself and shouldn't drag the user along.
+        let follow = app.isActive
+        Log.info("AppDesktops: \(bundleID) opened window \(window.id), sending it to desktop \(desktop) (follow=\(follow))")
+        spacesService.openOnDesktop(windowID: window.id, pid: pid, element: window.element, desktop: desktop, follow: follow)
     }
 
     private func windows(of pid: pid_t) -> [(id: CGWindowID, element: AXUIElement)] {
@@ -153,6 +175,11 @@ final class AppDesktopService: @unchecked Sendable {
     private func desktop(for app: NSRunningApplication) -> Int? {
         guard let bundleID = app.bundleIdentifier else { return nil }
         return lock.withLock { config.enabled ? config.desktop(forBundleID: bundleID) : nil }
+    }
+
+    private static func newestWindowID() -> CGWindowID {
+        let info = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[CFString: Any]] ?? []
+        return info.compactMap { $0[kCGWindowNumber] as? CGWindowID }.max() ?? 0
     }
 
     private func runningConfiguredApps() -> [NSRunningApplication] {
