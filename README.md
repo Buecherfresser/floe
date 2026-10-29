@@ -7,6 +7,7 @@ https://github.com/user-attachments/assets/5d0ffbd8-4222-4b7d-9b62-0dad385cac75
 - **Tiling.** Windows share each display and retile as soon as you open, move or resize one. Drop a window onto another to swap them, or hold Control and drag to resize.
 - **Desktops.** Hotkeys switch desktops instantly and send windows to other desktops, on any monitor.
 - **App switcher.** fn+key jumps to an app, fn+shift+key pulls its window onto the desktop you're on.
+- **Apps on their own desktop.** Pick a desktop per app, and its windows always open there.
 - **Stable desktop numbers.** When you plug a monitor in or out, every window goes back to its desktop number.
 
 <!-- GIF 2: switching desktops and sending a window to another desktop

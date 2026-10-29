@@ -56,6 +56,15 @@ final class SpacesService: @unchecked Sendable {
 
     private var activationObserver: NSObjectProtocol?
 
+    /// Apps launched by a pull, until their new window has been pulled.
+    private let pullingBundles = Locked(Set<String>())
+
+    /// Whether a pull is waiting for this app's new window — that window
+    /// belongs on the pulling desktop, not the app's own.
+    func isPulling(bundleID: String) -> Bool {
+        pullingBundles.withLock { $0.contains(bundleID) }
+    }
+
     init(accessibilityService: AccessibilityService) {
         self.accessibilityService = accessibilityService
 
@@ -347,6 +356,40 @@ final class SpacesService: @unchecked Sendable {
         }
     }
 
+    /// How long a just-opened window may take to show up on a desktop.
+    private static let newWindowSpaceTimeout: TimeInterval = 1.0
+
+    /// Sends a window an app just opened to "Desktop N", and follows it there
+    /// when `follow` is set (the user opened it, so they want to see it).
+    func openOnDesktop(windowID: CGWindowID, pid: pid_t, element: AXUIElement, desktop index: Int, follow: Bool) {
+        queue.async { [self] in
+            guard let target = CGSSpaceService.spaceID(forIndex: index) else {
+                Log.error("Spaces: can't open window \(windowID) on desktop \(index) — no such desktop")
+                return
+            }
+            let window = FocusedWindow(id: windowID, pid: pid, element: element)
+
+            // A brand-new window may not be on any space yet.
+            let deadline = Date().addingTimeInterval(Self.newWindowSpaceTimeout)
+            var spaces = CGSSpaceService.spaces(forWindow: windowID)
+            while spaces.isEmpty, Date() < deadline {
+                usleep(20_000)
+                spaces = CGSSpaceService.spaces(forWindow: windowID)
+            }
+
+            if spaces.contains(target) {
+                Log.info("Spaces: window \(windowID) opened on desktop \(index) already")
+                if follow {
+                    focus(space: target)
+                    focusWindow(window)
+                }
+                return
+            }
+            Log.info("Spaces: window \(windowID) (pid \(pid)) belongs on desktop \(index)")
+            moveWindow(window, to: target, follow: follow)
+        }
+    }
+
     private func moveFocusedWindowToAdjacentSpace(offset: Int, follow: Bool) {
         guard let window = focusedWindow() else {
             Log.error("Spaces: no focused window to move")
@@ -438,8 +481,12 @@ final class SpacesService: @unchecked Sendable {
                 // The app opens its new window wherever it remembers its last
                 // one, often another desktop. Wait for it and bring it here.
                 let existing = Set(windowIDs(ofBundle: bundleID))
+                pullingBundles.withLock { _ = $0.insert(bundleID) }
                 launch(bundleID: bundleID)
-                pullNewWindow(bundleID: bundleID, excluding: existing, to: current, attempt: 0, completion: completion)
+                pullNewWindow(bundleID: bundleID, excluding: existing, to: current, attempt: 0) { [self] in
+                    pullingBundles.withLock { _ = $0.remove(bundleID) }
+                    completion?()
+                }
                 return
             }
             pull(windowID: windowID, of: app, to: current)

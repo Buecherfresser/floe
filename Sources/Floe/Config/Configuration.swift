@@ -297,6 +297,27 @@ struct AppSwitcherConfig: Codable, Equatable, Sendable {
     )
 }
 
+// MARK: - App Desktops
+
+/// An app whose new windows always open on the same desktop.
+struct AppDesktop: Codable, Equatable, Sendable {
+    var bundleID: String
+    /// "Desktop N", counted across displays like `focusSpace`.
+    var desktop: Int
+    var name: String?
+}
+
+struct AppDesktopsConfig: Codable, Equatable, Sendable {
+    var enabled: Bool
+    var apps: [AppDesktop]
+
+    func desktop(forBundleID bundleID: String) -> Int? {
+        apps.first { $0.bundleID == bundleID }?.desktop
+    }
+
+    static let `default` = AppDesktopsConfig(enabled: false, apps: [])
+}
+
 // MARK: - Desktop Layouts
 
 /// How many desktops each monitor gets for a given number of connected monitors.
@@ -345,6 +366,7 @@ struct Configuration: Equatable, Sendable {
     var tiling: TilingConfig
     var desktopLayouts: DesktopLayoutsConfig
     var appSwitcher: AppSwitcherConfig
+    var appDesktops: AppDesktopsConfig
     var debug: Bool
 
     static let `default` = Configuration(
@@ -353,13 +375,14 @@ struct Configuration: Equatable, Sendable {
         tiling: .default,
         desktopLayouts: .default,
         appSwitcher: .default,
+        appDesktops: .default,
         debug: false
     )
 }
 
 extension Configuration: Codable {
     private enum CodingKeys: String, CodingKey {
-        case focusFollowsMouse, hotkeys, tiling, desktopLayouts, appSwitcher, debug
+        case focusFollowsMouse, hotkeys, tiling, desktopLayouts, appSwitcher, appDesktops, debug
     }
 
     init(from decoder: Decoder) throws {
@@ -369,6 +392,7 @@ extension Configuration: Codable {
         tiling = try c.decodeIfPresent(TilingConfig.self, forKey: .tiling) ?? .default
         desktopLayouts = try c.decodeIfPresent(DesktopLayoutsConfig.self, forKey: .desktopLayouts) ?? .default
         appSwitcher = try c.decodeIfPresent(AppSwitcherConfig.self, forKey: .appSwitcher) ?? .default
+        appDesktops = try c.decodeIfPresent(AppDesktopsConfig.self, forKey: .appDesktops) ?? .default
         debug = try c.decodeIfPresent(Bool.self, forKey: .debug) ?? false
     }
 }

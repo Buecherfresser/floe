@@ -11,6 +11,7 @@ final class FloeCore: ObservableObject {
     private var hotkeyService: HotkeyService?
     private var tilingService: TilingService?
     private var desktopLayoutService: DesktopLayoutService?
+    private var appDesktopService: AppDesktopService?
     private let spacesService: SpacesService
     private lazy var actionDispatcher = ActionDispatcher(spacesService: spacesService)
     private var cancellables = Set<AnyCancellable>()
@@ -89,6 +90,7 @@ final class FloeCore: ObservableObject {
         stopHotkeys()
         stopTiling()
         stopDesktopLayouts()
+        stopAppDesktops()
         isRunning = false
     }
 
@@ -104,6 +106,32 @@ final class FloeCore: ObservableObject {
         applyHotkeys(config)
         applyTiling(config)
         applyDesktopLayouts(config)
+        applyAppDesktops(config)
+    }
+
+    // MARK: - App Desktops
+
+    private func applyAppDesktops(_ config: Configuration) {
+        if config.appDesktops.enabled && accessibilityService.isTrusted {
+            if let service = appDesktopService {
+                service.update(config: config.appDesktops)
+            } else {
+                let service = AppDesktopService(
+                    accessibilityService: accessibilityService,
+                    spacesService: spacesService,
+                    config: config.appDesktops
+                )
+                appDesktopService = service
+                service.start()
+            }
+        } else {
+            stopAppDesktops()
+        }
+    }
+
+    private func stopAppDesktops() {
+        appDesktopService?.stop()
+        appDesktopService = nil
     }
 
     // MARK: - Desktop Layouts
