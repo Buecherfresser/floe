@@ -89,10 +89,25 @@ desktopLayouts:
     - monitors: 3
       desktops: [9, 6, 6]
 
+appDesktops:
+  enabled: true
+  apps:
+    - bundleID: com.apple.Safari
+      desktop: 2
+      name: Safari     # optional, just for you
+
 debug: false
 ```
 
 Layouts for more than three monitors go into `desktopLayouts.layouts` the same way.
+
+### Apps on their own desktop
+
+`appDesktops` opens an app's windows on a fixed desktop number, counted across monitors the same way as the desktop hotkeys. Every new window of the app goes there: the first one after launch, and ones you open later, such as with ⌘N. If the app was in front when the window opened, Floe switches to that desktop with it. A window that opens by itself in the background goes there without taking you along.
+
+Windows that are already open when Floe starts stay where they are, and a window you move to another desktop stays there too. Pulling an app with fn+shift+key still brings its new window to the desktop you're on. A desktop number your current monitors don't have is skipped.
+
+Apps are matched by bundle ID. To find an app's, run `osascript -e 'id of app "Spark Desktop"'`. This works for Chrome web apps like Google Chat too, which have their own bundle ID.
 
 ### Hotkeys in the config file
 
