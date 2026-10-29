@@ -216,6 +216,13 @@ final class AccessibilityService: ObservableObject {
         return (ref as? Bool) ?? false
     }
 
+    /// Asks the app to take the window out of native fullscreen. The exit
+    /// animates; the window lands back on a desktop when it finishes.
+    @discardableResult
+    nonisolated func exitFullScreen(_ element: AXUIElement) -> Bool {
+        AXUIElementSetAttributeValue(element, "AXFullScreen" as CFString, kCFBooleanFalse) == .success
+    }
+
     /// Releases a window from macOS's own window tiling (Window › Move &
     /// Resize › Return to Previous Size). Tiled windows otherwise snap back
     /// to their tile whenever they're moved or resized from outside.

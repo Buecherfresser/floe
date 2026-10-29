@@ -148,6 +148,14 @@ final class TilingService: @unchecked Sendable {
         "Notification Center", "SystemUIServer",
     ]
 
+    /// Apps that always float. System Settings resizes its own window per
+    /// pane and won't go below ~1100 pt wide, so tiling it only makes it
+    /// jump between a tile and floating. Matched by bundle ID, since the
+    /// app name is localized.
+    private static let floatingBundleIDs: Set<String> = [
+        "com.apple.systempreferences",
+    ]
+
     init(accessibilityService: AccessibilityService, config: TilingConfig) {
         self.accessibilityService = accessibilityService
         self._config = config
@@ -1136,9 +1144,10 @@ final class TilingService: @unchecked Sendable {
 
         // Build a set of PIDs with .regular activation policy (real user-facing apps).
         // This excludes wallpaper engines, menu bar utilities, background agents, etc.
+        let regularApps = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }
         let regularPIDs: Set<pid_t> = Set(
-            NSWorkspace.shared.runningApplications
-                .filter { $0.activationPolicy == .regular }
+            regularApps
+                .filter { !Self.floatingBundleIDs.contains($0.bundleIdentifier ?? "") }
                 .map(\.processIdentifier)
         )
 
