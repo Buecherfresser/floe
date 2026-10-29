@@ -252,17 +252,26 @@ enum CGSSpaceService {
     /// Uses `SLSBridgedMoveWindowsToManagedSpaceOperation`, which SkyLight
     /// forwards to the Dock for execution — so it works with SIP enabled and
     /// needs no code injection. Blocks briefly until the move is observable.
+    /// `countFailure: false` keeps an expected miss out of the compatibility check.
     @discardableResult
-    static func moveWindow(_ windowID: CGWindowID, toSpace spaceID: CGSSpaceID) -> Bool {
+    static func moveWindow(_ windowID: CGWindowID, toSpace spaceID: CGSSpaceID, countFailure: Bool = true) -> Bool {
         let fns = CGSFunctions.shared
         guard fns.isLoaded, let perform = fns.performBridgedOp else {
             Log.error("CGS: bridged window operations unavailable on this macOS version")
             return false
         }
 
-        if fns.spaces(forWindow: windowID).contains(spaceID) {
+        let source = fns.spaces(forWindow: windowID)
+        if source.contains(spaceID) {
             Log.info("CGS: window \(windowID) already on space \(spaceID)")
             return true
+        }
+        // Fullscreen and sticky windows aren't on (just) one desktop; the Dock
+        // ignores moves for them. That's not macOS breaking, so don't count it.
+        let desktops = Set(userSpaceIDs())
+        guard source.count == 1, desktops.contains(source[0]) else {
+            Log.error("CGS: window \(windowID) is not on a single desktop (spaces \(source)), not moving it")
+            return false
         }
 
         WindowTouches.note(windowID)
@@ -283,7 +292,9 @@ enum CGSSpaceService {
         }
 
         Log.error("CGS: window \(windowID) did not arrive on space \(spaceID) (now on \(fns.spaces(forWindow: windowID)))")
-        Compatibility.record(.windowMove, ok: false)
+        if countFailure {
+            Compatibility.record(.windowMove, ok: false)
+        }
         return false
     }
 

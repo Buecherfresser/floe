@@ -375,6 +375,12 @@ final class SpacesService: @unchecked Sendable {
         }
 
         Log.info("Spaces: moving window \(window.id) (pid \(window.pid)) to space \(target), follow=\(follow)")
+        // A fullscreen window lives on its own space, which the bridged move
+        // can't take it out of. Leave fullscreen first.
+        let wasFullScreen = isInFullScreen(window)
+        if wasFullScreen {
+            guard leaveFullScreen(window) else { return }
+        }
         // The bridged move keeps the window's frame. For a desktop on another
         // display, put the window onto that display first — while it's still
         // reachable through Accessibility — or it stays visible where it was.
@@ -383,7 +389,15 @@ final class SpacesService: @unchecked Sendable {
         if let targetDisplay = CGSSpaceService.display(containing: target)?.identifier, targetDisplay != sourceDisplay {
             moveOntoDisplay(of: target, window: window)
         }
-        guard CGSSpaceService.moveWindow(window.id, toSpace: target) else { return }
+        // Right after leaving fullscreen the Dock can still drop the move;
+        // try once more before giving up, and only count that second miss.
+        var moved = CGSSpaceService.moveWindow(window.id, toSpace: target, countFailure: !wasFullScreen)
+        if !moved, wasFullScreen {
+            usleep(Self.kFullScreenRetryDelay)
+            Log.info("Spaces: retrying move of window \(window.id) after leaving fullscreen")
+            moved = CGSSpaceService.moveWindow(window.id, toSpace: target)
+        }
+        guard moved else { return }
         // Arriving on the target desktop later should activate this app.
         FrontProcess.setFrontApp(window.pid, ofSpace: target)
 
@@ -566,6 +580,54 @@ final class SpacesService: @unchecked Sendable {
 
     /// After moving a window to a space on another display, its frame still
     /// lies on the old display — place it on the target display.
+    /// How long to wait for the fullscreen exit animation to put the window
+    /// back on a desktop.
+    private static let kFullScreenExitTimeout: TimeInterval = 3.0
+    /// Pause before retrying a move the Dock dropped after a fullscreen exit.
+    private static let kFullScreenRetryDelay: useconds_t = 300_000 // 300 ms
+
+    /// Whether the window is in native fullscreen: on no desktop, and the app says so.
+    private func isInFullScreen(_ window: FocusedWindow) -> Bool {
+        let desktops = Set(CGSSpaceService.userSpaceIDs())
+        let onDesktop = CGSSpaceService.spaces(forWindow: window.id).contains { desktops.contains($0) }
+        return !onDesktop && accessibilityService.isFullScreen(window.element)
+    }
+
+    /// Takes the window out of native fullscreen and waits until the Dock is
+    /// done with it, so a following move isn't dropped.
+    private func leaveFullScreen(_ window: FocusedWindow) -> Bool {
+        let fullScreenSpaces = Set(CGSSpaceService.spaces(forWindow: window.id))
+        let desktops = Set(CGSSpaceService.userSpaceIDs())
+        Log.info("Spaces: window \(window.id) is fullscreen (spaces \(fullScreenSpaces.sorted())), leaving fullscreen before moving it")
+        guard accessibilityService.exitFullScreen(window.element) else {
+            Log.error("Spaces: window \(window.id) did not leave fullscreen")
+            return false
+        }
+
+        // The window joins a desktop partway through the exit animation, and
+        // the Dock ignores moves until it has finished switching back. Wait
+        // for all of it: on a desktop, out of fullscreen, frame holding still,
+        // and the fullscreen space removed from its display.
+        let start = Date()
+        func elapsed() -> Int { Int(Date().timeIntervalSince(start) * 1000) }
+        var onDesktopAt: Int?, spaceGoneAt: Int?, lastFrame: CGRect?
+        while Date().timeIntervalSince(start) < Self.kFullScreenExitTimeout {
+            usleep(50_000)
+            let onDesktop = CGSSpaceService.spaces(forWindow: window.id).contains { desktops.contains($0) }
+            let spaceGone = !CGSSpaceService.displays().contains { $0.spaces.contains { fullScreenSpaces.contains($0.id) } }
+            let frame = accessibilityService.windowFrame(of: window.element)
+            if onDesktop, onDesktopAt == nil { onDesktopAt = elapsed() }
+            if spaceGone, spaceGoneAt == nil { spaceGoneAt = elapsed() }
+            if onDesktop, spaceGone, !accessibilityService.isFullScreen(window.element), frame != nil, frame == lastFrame {
+                Log.info("Spaces: window \(window.id) left fullscreen: on desktop at \(onDesktopAt ?? -1) ms, fullscreen space gone at \(spaceGoneAt ?? -1) ms, settled at \(elapsed()) ms")
+                return true
+            }
+            lastFrame = frame
+        }
+        Log.error("Spaces: window \(window.id) did not settle after leaving fullscreen (on desktop at \(onDesktopAt ?? -1) ms, fullscreen space gone at \(spaceGoneAt ?? -1) ms)")
+        return false
+    }
+
     private func moveOntoDisplay(of space: CGSSpaceID, window: FocusedWindow) {
         guard let display = CGSSpaceService.display(containing: space),
               let monitor = Monitors.monitor(withUUID: display.identifier) ?? Monitors.ordered().first(where: \.isMain),
