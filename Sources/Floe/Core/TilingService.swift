@@ -1149,6 +1149,14 @@ final class TilingService: @unchecked Sendable {
         }
         var cgWindowsByPID: [pid_t: [CGWindowInfo]] = [:]
 
+        // Right after a desktop switch (or a window being sent to another
+        // desktop) the window list still reports the old desktop's windows
+        // as on-screen. Tiling those can't work — the resize doesn't land —
+        // and the unchanged size then reads as a minimum size the window
+        // "needs", which floats it or squeezes its neighbours. Only windows
+        // on a desktop some display is showing take part.
+        let visibleSpaces = Set(CGSSpaceService.displays().map(\.currentSpace))
+
         for info in infoList {
             guard let pid = info[kCGWindowOwnerPID] as? pid_t,
                   let layer = info[kCGWindowLayer] as? Int,
@@ -1174,6 +1182,11 @@ final class TilingService: @unchecked Sendable {
 
             // Skip tiny windows (likely invisible or utility)
             guard bounds.width >= 50 && bounds.height >= 50 else { continue }
+
+            if !visibleSpaces.isEmpty {
+                let spaces = CGSSpaceService.spaces(forWindow: windowID)
+                if !spaces.isEmpty, !spaces.contains(where: visibleSpaces.contains) { continue }
+            }
 
             cgWindowsByPID[pid, default: []].append(CGWindowInfo(windowID: windowID, bounds: bounds))
         }
