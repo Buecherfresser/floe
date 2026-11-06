@@ -14,13 +14,16 @@ enum FrontProcess {
     private typealias SetFrontProcessWithOptions = @convention(c) (UnsafeMutablePointer<ProcessSerialNumber>, UInt32, UInt32) -> Int32
     private typealias GetProcessForPID = @convention(c) (pid_t, UnsafeMutablePointer<ProcessSerialNumber>) -> OSStatus
     private typealias MainConnectionID = @convention(c) () -> Int32
+    private typealias PostEventRecordTo = @convention(c) (UnsafeMutablePointer<ProcessSerialNumber>, UnsafeMutablePointer<UInt8>) -> Int32
 
     private static let kCPSNoWindows: UInt32 = 0x400
+    private static let kCPSUserGenerated: UInt32 = 0x200
 
     private struct Functions: @unchecked Sendable {
         let setSpaceFrontPSN: SetSpaceFrontPSN?
         let setFrontProcess: SetFrontProcessWithOptions?
         let processForPID: GetProcessForPID?
+        let postEventRecord: PostEventRecordTo?
         let connection: Int32
     }
 
@@ -35,6 +38,7 @@ enum FrontProcess {
             setSpaceFrontPSN: sym(skyLight, "SLSSpaceSetFrontPSN", SetSpaceFrontPSN.self),
             setFrontProcess: sym(skyLight, "_SLPSSetFrontProcessWithOptions", SetFrontProcessWithOptions.self),
             processForPID: sym(services, "GetProcessForPID", GetProcessForPID.self),
+            postEventRecord: sym(skyLight, "SLPSPostEventRecordTo", PostEventRecordTo.self),
             connection: sym(skyLight, "SLSMainConnectionID", MainConnectionID.self)?() ?? 0
         )
     }()
@@ -63,6 +67,36 @@ enum FrontProcess {
     static func setFrontApp(_ pid: pid_t, ofSpace space: CGSSpaceID) {
         guard let psn = psn(for: pid) else { return }
         _ = functions.setSpaceFrontPSN?(functions.connection, space, psn)
+    }
+
+    /// Makes one window the key window of its app and the app frontmost.
+    ///
+    /// Activating the whole app instead (`activate()`, `AXFrontmost`) lets
+    /// the app bring forward whichever window it last had in front — and if
+    /// that one is on another desktop, macOS follows it there. With Teams'
+    /// main window and call window on different desktops that's a jump on
+    /// every focus. Naming the window avoids it (same approach as yabai).
+    /// Returns false if the private calls aren't available.
+    @discardableResult
+    static func focus(windowID: CGWindowID, pid: pid_t) -> Bool {
+        guard var psn = psn(for: pid),
+              let setFrontProcess = functions.setFrontProcess,
+              let postEventRecord = functions.postEventRecord,
+              setFrontProcess(&psn, windowID, kCPSUserGenerated) == 0 else { return false }
+
+        // Two synthetic "make key window" event records for that window.
+        var bytes = [UInt8](repeating: 0, count: 0xf8)
+        bytes[0x04] = 0xf8
+        bytes[0x3a] = 0x10
+        for i in 0x20..<0x30 { bytes[i] = 0xff }
+        withUnsafeBytes(of: windowID.littleEndian) { raw in
+            for (offset, byte) in raw.enumerated() { bytes[0x3c + offset] = byte }
+        }
+        for phase: UInt8 in [0x01, 0x02] {
+            bytes[0x08] = phase
+            _ = bytes.withUnsafeMutableBufferPointer { postEventRecord(&psn, $0.baseAddress!) }
+        }
+        return true
     }
 
     static var finderPID: pid_t? {

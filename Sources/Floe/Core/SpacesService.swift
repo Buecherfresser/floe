@@ -614,7 +614,7 @@ final class SpacesService: @unchecked Sendable {
     private func focusWindow(_ window: FocusedWindow) {
         WindowHistory.note(pid: window.pid, windowID: window.id)
         FocusFollowsMouse.ignoreCurrentHover()
-        accessibilityService.focusApp(pid: window.pid)
+        accessibilityService.focusWindow(pid: window.pid, windowID: window.id)
         AXUIElementSetAttributeValue(window.element, kAXMainAttribute as CFString, kCFBooleanTrue)
         AXUIElementPerformAction(window.element, kAXRaiseAction as CFString)
     }
@@ -639,7 +639,7 @@ final class SpacesService: @unchecked Sendable {
             let origin = CGPoint(x: boundsDict["X"] ?? 0, y: boundsDict["Y"] ?? 0)
             Log.info("Spaces: focusing window \(windowID) (pid \(pid)) on space \(space)")
             FocusFollowsMouse.ignoreCurrentHover()
-            accessibilityService.focusApp(pid: pid)
+            accessibilityService.focusWindow(pid: pid, windowID: windowID)
             accessibilityService.raiseWindow(pid: pid, targetOrigin: origin)
             return true
         }

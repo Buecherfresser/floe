@@ -233,7 +233,7 @@ final class FocusFollowsMouse: @unchecked Sendable {
         let ax = accessibilityService
         let origin = windowInfo.bounds.origin
         DispatchQueue.main.async {
-            ax.focusApp(pid: pid)
+            ax.focusWindow(pid: pid, windowID: wid)
             ax.raiseWindow(pid: pid, targetOrigin: origin)
         }
     }

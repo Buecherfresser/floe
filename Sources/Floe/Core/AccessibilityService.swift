@@ -39,6 +39,17 @@ final class AccessibilityService: ObservableObject {
         Log.debug("AX: activate pid=\(pid) name=\(nsApp.localizedName ?? "?") ax=\(axResult.rawValue) result=\(activated)")
     }
 
+    /// Focuses exactly this window. Falls back to activating the app only if
+    /// the window-level call isn't available — activating the app lets macOS
+    /// jump to whatever desktop holds the app's other front window.
+    nonisolated func focusWindow(pid: pid_t, windowID: CGWindowID) {
+        if FrontProcess.focus(windowID: windowID, pid: pid) {
+            Log.debug("AX: focused wid=\(windowID) pid=\(pid)")
+            return
+        }
+        focusApp(pid: pid)
+    }
+
     /// Raises the specific window of a given app whose position matches `targetOrigin`.
     /// Retries once after a short delay if the first attempt returns an error.
     nonisolated func raiseWindow(pid: pid_t, targetOrigin: CGPoint) {
