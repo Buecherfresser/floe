@@ -23,6 +23,10 @@ final class DesktopLayoutService: @unchecked Sendable {
     /// (and to ride out short blips such as a monitor switching inputs).
     private static let reconcileDelay: TimeInterval = 3.0
     private static let homeRecordInterval: TimeInterval = 2.0
+    /// After a monitor change, how long the setup has to stay put before we
+    /// record homes again. A monitor that drops out for a few seconds would
+    /// otherwise have every window's home rewritten to where macOS parked it.
+    private static let homeRecordSettleTime: TimeInterval = 30.0
 
     private let queue = DispatchQueue(label: "com.jonasdrechsel.floe.desktop-layouts", qos: .utility)
 
@@ -40,6 +44,11 @@ final class DesktopLayoutService: @unchecked Sendable {
     private var pendingReconcile: DispatchWorkItem?
     private var timer: DispatchSourceTimer?
     private var didInitialRecord = false
+    /// Set by a display change, cleared once its reconcile ran.
+    private var displayChangePending = false
+    /// When the last display change was reconciled. Homes aren't recorded
+    /// until `homeRecordSettleTime` after it.
+    private var lastDisplayChangeReconciled: Date?
     private var reconcileRetries = 0
 
     /// Called after windows were moved between desktops (they produce no
@@ -108,8 +117,10 @@ final class DesktopLayoutService: @unchecked Sendable {
             if flags.contains(.beginConfigurationFlag) {
                 // Freeze homes before the Dock starts moving spaces around.
                 displaysChanging = true
+                displayChangePending = true
                 return
             }
+            displayChangePending = true
             scheduleReconcile(after: Self.reconcileDelay)
         }
     }
@@ -127,6 +138,8 @@ final class DesktopLayoutService: @unchecked Sendable {
         let monitorList = Monitors.ordered()
         let monitors = monitorList.map(\.uuid)
         guard !displaysChanging, monitors == recordedMonitorUUIDs else { return }
+        if let reconciled = lastDisplayChangeReconciled,
+           Date().timeIntervalSince(reconciled) < Self.homeRecordSettleTime { return }
 
         // Desktop numbers only mean the same thing while every monitor has its
         // layout's desktop count — e.g. after removing a desktop by hand,
@@ -168,6 +181,10 @@ final class DesktopLayoutService: @unchecked Sendable {
         defer {
             displaysChanging = false
             recordedMonitorUUIDs = Monitors.ordered().map(\.uuid)
+            if displayChangePending {
+                displayChangePending = false
+                lastDisplayChangeReconciled = Date()
+            }
         }
         guard config.enabled else { return }
 
@@ -280,7 +297,14 @@ final class DesktopLayoutService: @unchecked Sendable {
                 continue
             }
 
-            guard let space = target[desktop], space != current[0] else { continue }
+            guard let space = target[desktop] else {
+                Log.info("Desktops: window \(windowID) belongs on desktop \(desktop), which doesn't exist")
+                continue
+            }
+            guard space != current[0] else {
+                Log.info("Desktops: window \(windowID) already on its desktop \(desktop)")
+                continue
+            }
             Log.info("Desktops: moving window \(windowID) to desktop \(desktop)")
             CGSSpaceService.moveWindow(windowID, toSpace: space)
         }
