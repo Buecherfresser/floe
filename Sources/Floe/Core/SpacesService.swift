@@ -56,6 +56,10 @@ final class SpacesService: @unchecked Sendable {
 
     private var activationObserver: NSObjectProtocol?
 
+    /// Called (on the spaces queue) after Floe moved a window onto a desktop
+    /// that had no other windows. Set once, before any hotkey runs.
+    var onWindowMovedToEmptySpace: (@Sendable (CGWindowID, pid_t, CGSSpaceID) -> Void)?
+
     init(accessibilityService: AccessibilityService) {
         self.accessibilityService = accessibilityService
 
@@ -231,6 +235,24 @@ final class SpacesService: @unchecked Sendable {
         return true
     }
 
+    /// Whether `space` holds a normal app window other than `windowID`.
+    private func hasOtherWindows(onSpace space: CGSSpaceID, besides windowID: CGWindowID) -> Bool {
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        guard let infoList = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[CFString: Any]] else {
+            return true
+        }
+        return infoList.contains { info in
+            guard (info[kCGWindowLayer] as? Int) == 0,
+                  (info[kCGWindowAlpha] as? Double ?? 1) > 0,
+                  let id = info[kCGWindowNumber] as? CGWindowID, id != windowID,
+                  let pid = info[kCGWindowOwnerPID] as? pid_t, pid != ownPID,
+                  let bounds = info[kCGWindowBounds] as? [String: CGFloat],
+                  (bounds["Width"] ?? 0) >= 50, (bounds["Height"] ?? 0) >= 50,
+                  NSRunningApplication(processIdentifier: pid)?.activationPolicy == .regular else { return false }
+            return CGSSpaceService.spaces(forWindow: id).contains(space)
+        }
+    }
+
     /// The app owning the frontmost normal window on `space`, on any desktop.
     private func frontmostAppPID(onSpace space: CGSSpaceID) -> pid_t? {
         let ownPID = ProcessInfo.processInfo.processIdentifier
@@ -383,9 +405,13 @@ final class SpacesService: @unchecked Sendable {
         if let targetDisplay = CGSSpaceService.display(containing: target)?.identifier, targetDisplay != sourceDisplay {
             moveOntoDisplay(of: target, window: window)
         }
+        let targetWasEmpty = !hasOtherWindows(onSpace: target, besides: window.id)
         guard CGSSpaceService.moveWindow(window.id, toSpace: target) else { return }
         // Arriving on the target desktop later should activate this app.
         FrontProcess.setFrontApp(window.pid, ofSpace: target)
+        if targetWasEmpty {
+            onWindowMovedToEmptySpace?(window.id, window.pid, target)
+        }
 
         if follow {
             focus(space: target)

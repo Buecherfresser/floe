@@ -10,6 +10,9 @@ final class ActionDispatcher: @unchecked Sendable {
 
     init(spacesService: SpacesService) {
         self.spacesService = spacesService
+        spacesService.onWindowMovedToEmptySpace = { [weak self] windowID, pid, space in
+            self?.tilingService?.fillScreenWhenShown(windowID: windowID, pid: pid, space: space)
+        }
     }
 
     /// A window leaving the current space produces no AX notification, so

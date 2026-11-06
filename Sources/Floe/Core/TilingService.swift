@@ -108,6 +108,20 @@ final class TilingService: @unchecked Sendable {
     /// off; asking again on every retile only makes them redraw.
     private var settledFrames: [CGWindowID: (target: CGRect, actual: CGRect)] = [:]
 
+    /// Untiled windows (excluded apps such as Teams, floating windows) Floe
+    /// sent to an empty desktop. They fill the screen once that desktop
+    /// shows — a window sent with "move and stay" lands on a hidden desktop
+    /// and can only be resized when you get there.
+    private struct PendingFill {
+        let pid: pid_t
+        let space: CGSSpaceID
+        let until: DispatchTime
+        var attempts = 0
+    }
+    private var pendingFills: [CGWindowID: PendingFill] = [:]
+    private static let pendingFillLifetime: DispatchTimeInterval = .seconds(120)
+    private static let pendingFillAttempts = 10
+
     private static let snapBackLimit = 4
     private static let snapBackWindow: DispatchTimeInterval = .seconds(8)
     private static let snapBackSettle: DispatchTimeInterval = .milliseconds(300)
@@ -190,6 +204,17 @@ final class TilingService: @unchecked Sendable {
     /// Public entry point to force a retile (e.g. from hotkey).
     func retile() {
         scheduleRetile()
+    }
+
+    /// Floe moved `windowID` onto the empty desktop `space`: if the window
+    /// isn't tiled, make it fill the screen once that desktop is visible.
+    /// (A tiled window fills an empty desktop by itself.)
+    func fillScreenWhenShown(windowID: CGWindowID, pid: pid_t, space: CGSSpaceID) {
+        retileQueue.async { [weak self] in
+            guard let self else { return }
+            self.pendingFills[windowID] = PendingFill(pid: pid, space: space, until: .now() + Self.pendingFillLifetime)
+            self.scheduleRetile()
+        }
     }
 
     /// Drops user-adjusted split ratios and retiles.
@@ -385,6 +410,8 @@ final class TilingService: @unchecked Sendable {
         let tileableWindows = enumerateTileableWindows(config: cfg)
         Log.debug("Tiling: found \(tileableWindows.count) tileable window(s)")
 
+        applyPendingFills(tileable: Set(tileableWindows.map(\.windowID)), screens: screens, outerGap: CGFloat(cfg.gaps.outer))
+
         guard !tileableWindows.isEmpty else { return }
 
         // Append newly discovered windows — never remove existing ones (they may
@@ -555,6 +582,53 @@ final class TilingService: @unchecked Sendable {
 
         // Re-tile without the windows that couldn't fill their tile.
         if refusedAny { scheduleRetile(after: Self.refusalRecheckDelay) }
+    }
+
+    /// Resizes untiled windows that were sent to an empty desktop to fill
+    /// their screen, once that desktop is showing.
+    private func applyPendingFills(
+        tileable: Set<CGWindowID>,
+        screens: [(full: CGRect, visible: CGRect, uuid: String?)],
+        outerGap: CGFloat
+    ) {
+        guard !pendingFills.isEmpty else { return }
+        let now = DispatchTime.now()
+        let displays = CGSSpaceService.displays()
+        var retry = false
+
+        for (windowID, var fill) in pendingFills {
+            // Tiled after all (no rule excludes it): the layout fills the
+            // desktop. Expired or tried often enough: give up.
+            if tileable.contains(windowID) || now > fill.until || fill.attempts >= Self.pendingFillAttempts {
+                pendingFills[windowID] = nil
+                continue
+            }
+            let spaces = CGSSpaceService.spaces(forWindow: windowID)
+            guard spaces.contains(fill.space) else {
+                // Sent on elsewhere in the meantime.
+                if !spaces.isEmpty { pendingFills[windowID] = nil }
+                continue
+            }
+            // Its desktop isn't showing yet — wait for the switch.
+            guard displays.contains(where: { $0.currentSpace == fill.space }) else { continue }
+
+            fill.attempts += 1
+            pendingFills[windowID] = fill
+            guard let (element, frame) = accessibilityService.windows(for: fill.pid)
+                    .first(where: { accessibilityService.windowID(of: $0.0) == windowID }),
+                  let screenIndex = Self.screenIndex(forWindow: windowID, bounds: frame, in: screens, displays: displays) else {
+                // Accessibility exposes the window a moment after the switch.
+                retry = true
+                continue
+            }
+            let visible = screens[screenIndex].visible
+            let gap = min(max(0, outerGap), min(visible.width, visible.height) / 4)
+            let target = visible.insetBy(dx: gap, dy: gap)
+            Log.info("Tiling: wid=\(windowID) arrived alone on space \(fill.space) — filling the screen")
+            accessibilityService.setWindowFrame(element: element, frame: target)
+            pendingFills[windowID] = nil
+        }
+        if retry { scheduleRetile(after: .milliseconds(200)) }
     }
 
     // MARK: - Applying Layouts

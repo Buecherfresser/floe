@@ -14,7 +14,7 @@ This tab also has focus follows mouse (on or off, how long the cursor rests on a
 
 ### Tiling
 
-Turn tiling on, then set the gap between windows and the gap at the screen edge. With "Give every window the same space" on, every window on a display gets the same share. With it off, the first window takes the share you set and each further window splits what's left. Under "Apps that always float" you add apps that Floe leaves alone. Fixed-size windows like System Settings float on their own.
+Turn tiling on, then set the gap between windows and the gap at the screen edge. With "Give every window the same space" on, every window on a display gets the same share. With it off, the first window takes the share you set and each further window splits what's left. Under "Apps that always float" you add apps that Floe leaves alone, for example Microsoft Teams, whose windows don't share a screen well. When you send a floating window to an empty desktop with a hotkey, it fills that screen as soon as you get there. Fixed-size windows like System Settings float on their own.
 
 ### Hotkeys
 
