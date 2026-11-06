@@ -136,9 +136,15 @@ final class Updater: ObservableObject {
     }
 
     /// Compares dotted version numbers ("0.10.0" is newer than "0.9.2").
+    /// Only each part's leading digits count, so a local "0.1.5-dev" build
+    /// reads as 0.1.5 — not as 0.1.0, which made the updater "update" it
+    /// back to the last release.
     static func isVersion(_ candidate: String, newerThan current: String) -> Bool {
-        let a = candidate.split(separator: ".").map { Int($0) ?? 0 }
-        let b = current.split(separator: ".").map { Int($0) ?? 0 }
+        func parts(_ version: String) -> [Int] {
+            version.split(separator: ".").map { Int($0.prefix(while: \.isNumber)) ?? 0 }
+        }
+        let a = parts(candidate)
+        let b = parts(current)
         for i in 0..<max(a.count, b.count) {
             let x = i < a.count ? a[i] : 0
             let y = i < b.count ? b[i] : 0
