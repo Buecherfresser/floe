@@ -51,6 +51,8 @@ curl -fsSL https://raw.githubusercontent.com/Buecherfresser/floe/main/scripts/un
 
 Out of the box, Floe tiles your windows, ⌃1–9 switches desktops and ⌃⇧1–9 sends the focused window there. Everything else, including your own hotkeys, is in Settings: click the Floe icon in the menu bar. Floe saves your settings to `~/.config/floe/config.yaml` if you'd rather edit a file. [docs/configuration.md](docs/configuration.md) walks through both.
 
+Turn off "Automatically rearrange Spaces based on most recent use" in System Settings › Desktop & Dock. It's on by default, and with it macOS reorders your desktops behind Floe's back, for example when you jump to an app on another desktop. Your windows stay put, but their desktops swap places, so most of them end up one number off.
+
 ## License
 
 MIT License, see [LICENSE](LICENSE). Copyright (c) 2026 Jonas Drechsel ([jonasdrechsel.com](https://jonasdrechsel.com))
