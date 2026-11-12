@@ -138,6 +138,11 @@ final class DesktopLayoutService: @unchecked Sendable {
         let monitorList = Monitors.ordered()
         let monitors = monitorList.map(\.uuid)
         guard !displaysChanging, monitors == recordedMonitorUUIDs else { return }
+        // With the lid closed and the Mac asleep there is no monitor, and
+        // macOS keeps all desktops in one list that leaves out one desktop of
+        // each disconnected monitor. Numbers taken from that list are off by
+        // one, and a dark wake is long enough for this timer to fire.
+        guard !monitorList.isEmpty else { return }
         if let reconciled = lastDisplayChangeReconciled,
            Date().timeIntervalSince(reconciled) < Self.homeRecordSettleTime { return }
 
