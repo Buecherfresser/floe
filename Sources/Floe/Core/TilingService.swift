@@ -1090,10 +1090,29 @@ final class TilingService: @unchecked Sendable {
             CGRect(x: r.origin.x, y: primaryHeight - r.maxY, width: r.width, height: r.height)
         }
         let monitors = Monitors.ordered()
+        let dockHidden = isDockAutoHidden()
         return NSScreen.screens.map { screen in
             let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
-            return (flip(screen.frame), flip(screen.visibleFrame), monitors.first { $0.displayID == id }?.uuid)
+            var visible = screen.visibleFrame
+            if dockHidden {
+                // macOS sometimes keeps the Dock's strip reserved after a
+                // monitor change although the Dock is hidden. Like yabai,
+                // only the menu bar counts then.
+                visible = CGRect(x: screen.frame.minX, y: screen.frame.minY,
+                                 width: screen.frame.width, height: visible.maxY - screen.frame.minY)
+            }
+            return (flip(screen.frame), flip(visible), monitors.first { $0.displayID == id }?.uuid)
         }
+    }
+
+    private typealias DockAutoHideFn = @convention(c) () -> UInt8
+    private static let dockAutoHideFn: DockAutoHideFn? =
+        dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CoreDockGetAutoHideEnabled") // RTLD_DEFAULT
+            .map { unsafeBitCast($0, to: DockAutoHideFn.self) }
+
+    /// Whether "Automatically hide and show the Dock" is on.
+    private static func isDockAutoHidden() -> Bool {
+        dockAutoHideFn?() ?? 0 != 0
     }
 
     /// The screen showing the window's space. A window moved to another
